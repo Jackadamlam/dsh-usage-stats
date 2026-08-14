@@ -14,7 +14,7 @@ Token usage heatmap, provider/model breakdowns, account balances, and subscripti
 
 | 功能 | 说明 |
 | --- | --- |
-| 多供应商余额 | 余额卡可选供应商；内置 DeepSeek、OpenRouter、Moonshot/Kimi、Z.AI 查询方案，其余供应商显示"无公开余额接口" |
+| 统一供应商账户卡 | 一次只显示当前选择的供应商；DeepSeek 等展示余额，OpenCode Go、Z.ai 展示订阅额度 |
 | 订阅额度 | OpenCode Go 显示 5 小时/每周/每月窗口；Z.ai Coding Plan 显示会话、周额度与 MCP 月度额度 |
 | 用量概览 | 今日、本月、累计 Token，以及今日缓存命中率 |
 | 月历热图 | 按月浏览；颜色越深表示用量越高 |
@@ -22,7 +22,7 @@ Token usage heatmap, provider/model breakdowns, account balances, and subscripti
 | 增量聚合 | 只折叠新增事件；检测到日志截断或重写时自动从头计算 |
 | 本机边界 | API 同时校验 peer socket 与 Host；浏览器永远拿不到 API key |
 
-界面支持中文和英文。余额采用金额卡片，订阅采用分窗口进度条；各类请求独立刷新，打开面板后立即加载，之后 Token 用量每分钟刷新、余额和订阅额度每五分钟刷新。
+界面支持中文和英文。余额与订阅共用同一套供应商卡片框架：余额型供应商在卡内显示金额，订阅型供应商显示分窗口进度条；选择器切换后只渲染当前供应商。各类请求独立刷新，打开面板后立即加载，之后 Token 用量每分钟刷新、余额和订阅额度每五分钟刷新。
 
 ## 安装 / Installation
 
@@ -91,7 +91,7 @@ OpenCode Go 按以下顺序寻找凭据：
 
 前两种方式调用 `https://opencode.ai/zen/go/v1/usage`。它使用 `sk-opencode-…` Bearer Key，安装最简单，但目前仍是 OpenCode 自用的**未公开文档接口**，将来可能变化。第三种方式读取登录后的 workspace 页面，只建议接口发生兼容问题时临时使用；浏览器 Cookie 等同登录凭据，不应提交到 Git、日志或 issue。
 
-Z.ai 使用 Coding Plan 的 quota/subscription 接口；全球区请求 `api.z.ai`，中国区请求 `open.bigmodel.cn`。如果同一个 Z.ai key 同时支持余额接口，面板会分别显示“金额余额”和“订阅比例”，二者不会混为一项。
+Z.ai 使用 Coding Plan 的 quota/subscription 接口；全球区请求 `api.z.ai`，中国区请求 `open.bigmodel.cn`。选择 Z.ai 时优先展示更适合订阅计划的比例窗口，不会同时再堆叠一张余额卡。
 
 ### 重启
 
@@ -115,8 +115,9 @@ node scripts/install.mjs
 ## 使用 / Usage
 
 - 点击侧边栏入口打开面板。
-- 余额卡顶部可切换供应商；切换后自动查询该供应商余额。
-- 订阅额度卡独立显示 OpenCode Go 与 Z.ai；未配置、凭据失效、限流和接口不可用会显示不同状态。
+- 使用“当前供应商”选择器切换账户视图；面板一次只显示一个供应商。
+- DeepSeek、OpenRouter、Moonshot/Kimi 等余额型供应商显示金额；OpenCode Go 与 Z.ai 显示订阅比例、窗口和重置时间。
+- 未配置、凭据失效、限流和接口不可用会在同一张供应商卡片中显示不同状态。
 - 使用 `‹`、`›` 切换月份，点击“今天”返回当前月份。
 - 点击热图日期或最近 14 个日历日列表，查看当天的分供应商/分模型明细（同一模型来自不同供应商会分开显示，如 `deepseek-official · deepseek-v4-flash` 与 `ark · deepseek-v4-flash`）。
 - 标题栏刷新按钮会同时重新请求用量、供应商列表、当前供应商余额和订阅额度。
@@ -244,7 +245,7 @@ scripts/verify-raw.mjs    four-path raw-data verification
 - [Javis603/token-monitor](https://github.com/Javis603/token-monitor)：参考其多 provider 配额归一化与 Z.ai 限额解析。
 - [xiaoqi20/dsh-opencode-go-usage](https://github.com/xiaoqi20/dsh-opencode-go-usage)：参考其 DSH 凭据接入、OpenCode `auth.json` 回退与 Bearer usage endpoint。
 
-本项目重新实现统一的 subscription adapter 和同屏卡片，不复制上述项目的 UI；OpenCode Go 的 usage endpoint 尚未公开文档，因此保留 dashboard 兼容回退并由测试锁定两种响应格式。
+本项目重新实现统一的 subscription adapter 和单供应商账户卡片，不复制上述项目的 UI；OpenCode Go 的 usage endpoint 尚未公开文档，因此保留 dashboard 兼容回退并由测试锁定两种响应格式。
 
 ## License
 

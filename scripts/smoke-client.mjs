@@ -139,35 +139,62 @@ if (!dayDetail.includes("ark · deepseek-v4-flash")) throw new Error("same model
 if (dayDetail.length < 500) throw new Error("day detail markup too small");
 console.log("day detail render ok (provider-prefixed models), markup length:", dayDetail.length);
 
-// Subscription UI is intentionally distinct from the monetary balance card:
-// each provider gets branded multi-window progress meters and reset metadata.
-const { SubscriptionCard } = exports_;
-const subscriptionMarkup = renderToStaticMarkup(react.createElement("div", null, [
-	react.createElement(SubscriptionCard, {
-		key: "go",
-		provider: {
-			id: "opencode-go",
-			displayName: "OpenCode Go",
-			status: "ok",
-			plan: "Go",
-			windows: [
-				{ kind: "session", usedPercent: 12, remainingPercent: 88, resetsAt: "2026-08-14T01:00:00Z" },
-				{ kind: "weekly", usedPercent: 34, remainingPercent: 66 },
-				{ kind: "monthly", usedPercent: 56, remainingPercent: 44 }
-			]
-		},
-		translate: (key, params) => params?.value === void 0 ? key : `${key}:${params.value}`
-	}),
-	react.createElement(SubscriptionCard, {
-		key: "zai",
-		provider: { id: "zai", displayName: "Z.ai", status: "not-configured", plan: "GLM Coding Plan", missingCredentials: ["ZAI_API_KEY"], windows: [] },
-		translate: (key, params) => params?.refs === void 0 ? key : `${key}:${params.refs}`
-	})
-]));
-if (!subscriptionMarkup.includes("OpenCode Go") || !subscriptionMarkup.includes("Z.ai")) throw new Error("subscription cards missing provider identities");
-if ((subscriptionMarkup.match(/role="progressbar"/g) ?? []).length !== 3) throw new Error("OpenCode Go must render three quota meters");
-if (!subscriptionMarkup.includes("width:12%") || !subscriptionMarkup.includes("ZAI_API_KEY")) throw new Error("subscription meter/config state missing");
-console.log("subscription cards render ok, markup length:", subscriptionMarkup.length);
+// Balance and subscription providers share one account-card frame. Only the
+// selected provider is rendered; the inner payload varies by account mode.
+const { ProviderAccountCard, buildProviderChoices } = exports_;
+const translateAccount = (key, params) => {
+	if (params?.value !== void 0) return `${key}:${params.value}`;
+	if (params?.refs !== void 0) return `${key}:${params.refs}`;
+	if (params?.ref !== void 0) return `${key}:${params.ref}`;
+	return key;
+};
+const deepseekMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "deepseek-official", displayName: "DeepSeek", accountMode: "balance" },
+	subscription: null,
+	subscriptionLoading: false,
+	subscriptionError: null,
+	balance: { isAvailable: true, currency: "CNY", total: "36.44", toppedUp: "20", granted: "16.44" },
+	balanceState: "ok",
+	balanceMessage: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+const goSubscription = {
+	id: "opencode-go",
+	displayName: "OpenCode Go",
+	status: "ok",
+	plan: "Go",
+	windows: [
+		{ kind: "session", usedPercent: 12, remainingPercent: 88, resetsAt: "2026-08-14T01:00:00Z" },
+		{ kind: "weekly", usedPercent: 34, remainingPercent: 66 },
+		{ kind: "monthly", usedPercent: 56, remainingPercent: 44 }
+	]
+};
+const goMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription", subscriptionId: "opencode-go" },
+	subscription: goSubscription,
+	subscriptionLoading: false,
+	subscriptionError: null,
+	balance: null,
+	balanceState: "loading",
+	balanceMessage: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accountCard")) throw new Error("both account modes must use the shared card frame");
+if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
+if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
+if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+
+const choices = buildProviderChoices([
+	{ id: "deepseek-official", displayName: "DeepSeek", scheme: "deepseek", configured: true },
+	{ id: "zai-coding-cn", displayName: "Z.ai CN", scheme: "zai", configured: true }
+], [goSubscription, { id: "zai", displayName: "Z.ai", status: "ok", windows: [] }]);
+if (choices.length !== 3) throw new Error(`provider merge must collapse Z.ai aliases, got ${choices.length}`);
+if (choices.find((provider) => provider.id === "zai-coding-cn")?.accountMode !== "subscription") throw new Error("Z.ai must prefer its subscription presentation");
+const selectedMarkup = goMarkup;
+if (selectedMarkup.includes("DeepSeek") || selectedMarkup.includes("Z.ai")) throw new Error("the account area must render only the selected provider");
+console.log("unified single-provider account card ok, balance:", deepseekMarkup.length, "subscription:", goMarkup.length);
 
 // Race regression (P1): usage and balance must each keep their OWN staleness
 // counter, so a balance request issued right after a usage request must NOT
