@@ -1,7 +1,7 @@
 # dsh-usage-stats
 
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.1.0-1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases)
+[![version](https://img.shields.io/badge/version-0.1.1-1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases)
 [![license](https://img.shields.io/badge/license-MIT-2da44e)](LICENSE)
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 网页端提供 Token 用量热图、分模型统计和 DeepSeek 账户余额。
@@ -186,7 +186,7 @@ scripts/verify-raw.mjs    four-path raw-data verification
 
 ## 兼容性说明
 
-当前版本为 `0.1.0`。插件依赖 DeepSeek Harness 的客户端模块加载器、Cordis 服务和 session persistence 接口；Harness 预发布版本升级后如这些内部接口变化，可能需要同步适配。
+当前版本为 `0.1.1`。插件依赖 DeepSeek Harness 的客户端模块加载器、Cordis 服务和 session persistence 接口；Harness 预发布版本升级后如这些内部接口变化，可能需要同步适配。
 
 ## License
 
