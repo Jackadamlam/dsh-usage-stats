@@ -61,6 +61,11 @@ async function testRouteFence(root) {
 	const head = makeResponse();
 	await handler({ method: "HEAD", headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, head);
 	assert.equal(head.status, 405, "the endpoints are GET-only");
+
+	const subscriptions = makeResponse();
+	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, subscriptions);
+	assert.equal(subscriptions.status, 200);
+	assert.deepEqual(JSON.parse(subscriptions.body).subscriptions.map((provider) => provider.status), ["not-configured", "not-configured"]);
 }
 
 async function testPersistedToLive(root) {

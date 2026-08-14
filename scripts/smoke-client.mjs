@@ -126,16 +126,48 @@ const dayDetail = renderToStaticMarkup(react.createElement(DayDetail, {
 		cacheWriteTokens: 0,
 		cacheHitRate: 99.4,
 		models: [
-			{ model: "deepseek-v4-flash", tokens: 30000000, inputTokens: 100000, outputTokens: 50000, cacheReadTokens: 29000000, cacheWriteTokens: 0, cacheHitRate: 99.6 },
-			{ model: "deepseek-reasoner", tokens: 4333358, inputTokens: 99382, outputTokens: 66824, cacheReadTokens: 5017152, cacheWriteTokens: 0, cacheHitRate: 98.1 }
+			{ model: "deepseek-official/deepseek-v4-flash", tokens: 30000000, inputTokens: 100000, outputTokens: 50000, cacheReadTokens: 29000000, cacheWriteTokens: 0, cacheHitRate: 99.6 },
+			{ model: "ark/deepseek-v4-flash", tokens: 4333358, inputTokens: 99382, outputTokens: 66824, cacheReadTokens: 5017152, cacheWriteTokens: 0, cacheHitRate: 98.1 }
 		]
 	},
 	translate: (key) => key,
 	onBack: () => {}
 }));
 if (!dayDetail.includes("deepseek-v4-flash")) throw new Error("day detail missing model rows");
+if (!dayDetail.includes("deepseek-official · deepseek-v4-flash")) throw new Error("day detail must prefix the provider");
+if (!dayDetail.includes("ark · deepseek-v4-flash")) throw new Error("same model from another provider must stay distinct");
 if (dayDetail.length < 500) throw new Error("day detail markup too small");
-console.log("day detail render ok, markup length:", dayDetail.length);
+console.log("day detail render ok (provider-prefixed models), markup length:", dayDetail.length);
+
+// Subscription UI is intentionally distinct from the monetary balance card:
+// each provider gets branded multi-window progress meters and reset metadata.
+const { SubscriptionCard } = exports_;
+const subscriptionMarkup = renderToStaticMarkup(react.createElement("div", null, [
+	react.createElement(SubscriptionCard, {
+		key: "go",
+		provider: {
+			id: "opencode-go",
+			displayName: "OpenCode Go",
+			status: "ok",
+			plan: "Go",
+			windows: [
+				{ kind: "session", usedPercent: 12, remainingPercent: 88, resetsAt: "2026-08-14T01:00:00Z" },
+				{ kind: "weekly", usedPercent: 34, remainingPercent: 66 },
+				{ kind: "monthly", usedPercent: 56, remainingPercent: 44 }
+			]
+		},
+		translate: (key, params) => params?.value === void 0 ? key : `${key}:${params.value}`
+	}),
+	react.createElement(SubscriptionCard, {
+		key: "zai",
+		provider: { id: "zai", displayName: "Z.ai", status: "not-configured", plan: "GLM Coding Plan", missingCredentials: ["ZAI_API_KEY"], windows: [] },
+		translate: (key, params) => params?.refs === void 0 ? key : `${key}:${params.refs}`
+	})
+]));
+if (!subscriptionMarkup.includes("OpenCode Go") || !subscriptionMarkup.includes("Z.ai")) throw new Error("subscription cards missing provider identities");
+if ((subscriptionMarkup.match(/role="progressbar"/g) ?? []).length !== 3) throw new Error("OpenCode Go must render three quota meters");
+if (!subscriptionMarkup.includes("width:12%") || !subscriptionMarkup.includes("ZAI_API_KEY")) throw new Error("subscription meter/config state missing");
+console.log("subscription cards render ok, markup length:", subscriptionMarkup.length);
 
 // Race regression (P1): usage and balance must each keep their OWN staleness
 // counter, so a balance request issued right after a usage request must NOT
@@ -143,13 +175,17 @@ console.log("day detail render ok, markup length:", dayDetail.length);
 const { createLoader, fmtCurrency } = exports_;
 const usageLoader = createLoader();
 const balanceLoader = createLoader();
+const subscriptionLoader = createLoader();
 const usageId = usageLoader.start();
 const balanceId = balanceLoader.start();
+const subscriptionId = subscriptionLoader.start();
 if (!usageLoader.isCurrent(usageId)) throw new Error("race: balance start invalidated the usage request");
 if (!balanceLoader.isCurrent(balanceId)) throw new Error("balance request must stay current");
+if (!subscriptionLoader.isCurrent(subscriptionId)) throw new Error("subscription request must stay current");
 usageLoader.start(); // a newer usage refresh supersedes the old one
 if (usageLoader.isCurrent(usageId)) throw new Error("a newer usage start must supersede the previous usage request");
 if (!balanceLoader.isCurrent(balanceId)) throw new Error("balance must not be affected by usage refreshes");
+if (!subscriptionLoader.isCurrent(subscriptionId)) throw new Error("subscription must not be affected by usage refreshes");
 console.log("loader race regression ok (independent usage/balance counters)");
 
 // Currency formatting must respect the reported currency, not hardcode ¥.
