@@ -15,9 +15,13 @@
     "dsh",
     "token-usage"
   ],
+  "bin": {
+    "dsh-usage-stats-install": "scripts/install.mjs"
+  },
   "files": [
     "lib/",
     "docs/images/usage-panel.png",
+    "scripts/install.mjs",
     "README.md",
     "LICENSE",
     "SECURITY.md"
@@ -41,9 +45,10 @@
     }
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/usage.js && node --check lib/client.js && node --check scripts/smoke-client.mjs && node --check scripts/test-server.mjs && node --check scripts/validate-fold.mjs && node --check scripts/verify-raw.mjs && node --check scripts/check-balance.mjs",
-    "test": "npm run test:client && npm run test:server",
+    "check": "node --check lib/index.js && node --check lib/usage.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/smoke-client.mjs && node --check scripts/test-install.mjs && node --check scripts/test-server.mjs && node --check scripts/validate-fold.mjs && node --check scripts/verify-raw.mjs && node --check scripts/check-balance.mjs",
+    "test": "npm run test:client && npm run test:server && npm run test:install",
     "test:client": "node scripts/smoke-client.mjs",
+    "test:install": "node scripts/test-install.mjs",
     "test:server": "node scripts/test-server.mjs",
     "validate:live": "node scripts/validate-fold.mjs && node scripts/verify-raw.mjs"
   },

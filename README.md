@@ -25,61 +25,56 @@ Token usage heatmap, per-model breakdowns, and DeepSeek account balance for the 
 
 ## 安装 / Installation
 
-### 前置条件
+### 一条命令安装
 
-- DeepSeek Harness 的 `web` profile（面向 `@deepseek-ai/dsh >= 0.1.0-rc.6`）。
-- DeepSeek API key 仅在需要余额功能时配置；用量统计本身不依赖该 key。
+需要 DeepSeek Harness 的 `web` profile（面向 `@deepseek-ai/dsh >= 0.1.0-rc.6`），以及随 Node.js 提供的 `npx`。
 
-### 1. 获取源码并复制插件
-
-```powershell
-git clone https://github.com/Ychris12138/dsh-usage-stats.git
-Set-Location dsh-usage-stats
-
-$target = Join-Path $env:USERPROFILE ".dsh\profiles\node_modules\dsh-usage-stats"
-New-Item -ItemType Directory -Force $target | Out-Null
-Copy-Item -Recurse -Force .\lib, .\package.json, .\README.md, .\LICENSE $target
-```
-
-macOS/Linux：
+在 PowerShell、命令提示符或 macOS/Linux 终端运行同一条命令：
 
 ```bash
-git clone https://github.com/Ychris12138/dsh-usage-stats.git
-cd dsh-usage-stats
-
-target="$HOME/.dsh/profiles/node_modules/dsh-usage-stats"
-mkdir -p "$target"
-cp -R lib package.json README.md LICENSE "$target/"
+npx --yes github:Ychris12138/dsh-usage-stats
 ```
 
-### 2. 启用插件
+安装器会自动完成两件事：把运行文件复制到 `~/.dsh/profiles/node_modules/dsh-usage-stats`，并在 `profiles/web/cordis.patch.yml` 中幂等启用插件。重复运行同一命令即可更新，不会重复添加配置。
 
-在 `~/.dsh/profiles/web/cordis.patch.yml` 末尾加入：
+如设置了 `DSH_HOME`，安装器会使用该目录而不是 `~/.dsh`。可先预览或只检查现有安装：
 
-```yaml
-# Token usage heatmap + DeepSeek balance panel
-- insert:
-    - id: usage-stats
-      name: dsh-usage-stats
+```bash
+npx --yes github:Ychris12138/dsh-usage-stats --dry-run
+npx --yes github:Ychris12138/dsh-usage-stats --check
 ```
 
-### 3. 可选：配置余额查询
+如果不希望安装器修改 Cordis patch，可加 `--no-enable`，再自行配置。
 
-在 `~/.dsh/.credentials.yaml` 中配置：
+### 可选：配置余额查询
+
+只有余额查询需要 DeepSeek API key。用量统计无需 key；未配置时余额卡会显示凭据缺失。
 
 ```yaml
+# ~/.dsh/.credentials.yaml
 DEEPSEEK_API_KEY: sk-your-key-here
 ```
 
-不要把凭据文件或真实 key 提交到 Git。未配置时，用量功能正常，余额卡会显示凭据缺失。
+安装器不会读取、创建或修改凭据文件。不要把真实 key 提交到 Git，也不要把它粘贴给编码 Agent。
 
-### 4. 重启
+### 重启
 
 ```bash
 dsh web
 ```
 
 浏览器硬刷新后，侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
+
+<details>
+<summary>无法使用 npx 时：从源码安装</summary>
+
+```bash
+git clone https://github.com/Ychris12138/dsh-usage-stats.git
+cd dsh-usage-stats
+node scripts/install.mjs
+```
+
+</details>
 
 ## 使用 / Usage
 
@@ -89,6 +84,36 @@ dsh web
 - 标题栏刷新按钮会同时重新请求用量和余额。
 
 “最近 14 天”按本地日历计算，只显示窗口内存在用量的日期；未来时间戳不会计入该列表。
+
+## Agent 友好安装 / Agent-friendly installation
+
+可以把下面整段直接交给 Codex、Claude Code 或其他本地编码 Agent：
+
+```text
+Install or update dsh-usage-stats from:
+https://github.com/Ychris12138/dsh-usage-stats
+
+Constraints:
+- Resolve DSH_HOME from the environment; otherwise use ~/.dsh.
+- Do not read, print, edit, or request .credentials.yaml or any API key.
+- Do not expose the plugin through a reverse proxy.
+- Do not restart or terminate an existing dsh process without asking me.
+
+Procedure:
+1. Confirm node, npx, and dsh are available.
+2. Run: npx --yes github:Ychris12138/dsh-usage-stats
+3. Require the installer to report a verified package and exactly one Cordis patch entry.
+4. Report the resolved install and patch paths.
+5. If dsh web is already running, tell me a restart is needed and stop.
+```
+
+安装器本身提供清晰的退出码：未知参数返回 `2`；文件、版本或配置验证失败返回非零；成功时输出已验证版本、安装路径和 patch 路径。因此 Agent 不需要自行解析或重写 YAML。
+
+Agent 如果只获准检查而不能修改，应运行：
+
+```bash
+npx --yes github:Ychris12138/dsh-usage-stats --check
+```
 
 ## 隐私与安全 / Privacy & security
 
@@ -152,6 +177,8 @@ lib/index.js              server routes, incremental cache, balance fetch
 lib/usage.js              pure token-usage aggregation
 lib/client.js             sidebar panel and heatmap
 scripts/smoke-client.mjs  offline client regressions
+scripts/install.mjs       cross-platform idempotent installer
+scripts/test-install.mjs  installer regression and idempotency test
 scripts/test-server.mjs   offline server regressions
 scripts/validate-fold.mjs live projection comparison
 scripts/verify-raw.mjs    four-path raw-data verification
