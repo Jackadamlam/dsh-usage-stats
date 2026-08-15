@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { collectSubscriptions, subscriptionCredentialRefs } from "../lib/subscriptions.js";
+import { collectSubscription, collectSubscriptions, subscriptionCredentialRefs } from "../lib/subscriptions.js";
 
 function credentials(values) {
 	return {
@@ -133,7 +133,7 @@ const noLocalAuth = {
 		"https://api.z.ai/api/monitor/usage/quota/limit",
 		"https://api.z.ai/api/biz/subscription/list"
 	]);
-	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
+	assert.ok(calls.every((call) => call.init.headers.authorization === secret));
 	assert.equal(JSON.stringify(zai).includes(secret), false, "API key must not cross the module interface");
 	console.log("Z.ai quota normalization ok");
 }
@@ -150,6 +150,122 @@ const noLocalAuth = {
 	assert.equal(providers[1].region, "bigmodel-cn");
 	assert.equal(providers[1].status, "unauthorized");
 	console.log("Z.ai region and auth error mapping ok");
+}
+
+{
+	const secret = "kimi-secret";
+	const kimi = await collectSubscription("kimi", credentials({ KIMI_API_KEY: secret }), {}, {
+		now: () => now,
+		fetch: async (url, init) => {
+			assert.equal(String(url), "https://api.kimi.com/coding/v1/usages");
+			assert.equal(init.headers.authorization, `Bearer ${secret}`);
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({
+					plan: "Coding Pro",
+					limits: [{ detail: { limit: 1000, remaining: 750, resetTime: "2026-08-14T05:00:00Z" } }],
+					usage: { limit: 10000, remaining: 6000, resetTime: "2026-08-17T00:00:00Z" }
+				})
+			};
+		}
+	});
+	assert.equal(kimi.status, "ok");
+	assert.equal(kimi.plan, "Coding Pro");
+	assert.deepEqual(kimi.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 25, 75],
+		["weekly", 40, 60]
+	]);
+	assert.equal(JSON.stringify(kimi).includes(secret), false);
+	console.log("Kimi token plan normalization ok");
+}
+
+{
+	const secret = "minimax-secret";
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: secret, MINIMAX_API_REGION: "cn" }), {}, {
+		now: () => now,
+		fetch: async (url, init) => {
+			assert.equal(String(url), "https://www.minimaxi.com/v1/token_plan/remains");
+			assert.equal(init.headers.authorization, `Bearer ${secret}`);
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({
+					base_resp: { status_code: 0 },
+					model_remains: [{
+						model_name: "general",
+						current_interval_remaining_percent: 82,
+						remains_time: 3600000,
+						current_weekly_status: 1,
+						current_weekly_remaining_percent: 45,
+						weekly_remains_time: 604800000
+					}]
+				})
+			};
+		}
+	});
+	assert.equal(minimax.status, "ok");
+	assert.equal(minimax.region, "cn");
+	assert.deepEqual(minimax.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 18, 82],
+		["weekly", 55, 45]
+	]);
+	assert.deepEqual(minimax.windows.map((window) => window.resetsAt), [
+		"2026-08-14T01:00:00.000Z",
+		"2026-08-21T00:00:00.000Z"
+	]);
+	assert.equal(JSON.stringify(minimax).includes(secret), false);
+	console.log("MiniMax token plan normalization ok");
+}
+
+{
+	const calls = [];
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			if (calls.length === 1) return { ok: false, status: 404, json: async () => ({}) };
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({ model_remains: [{ model_name: "general", current_interval_remaining_percent: 90, current_weekly_status: 0 }] })
+			};
+		}
+	});
+	assert.equal(minimax.status, "ok");
+	assert.deepEqual(calls, [
+		"https://www.minimax.io/v1/token_plan/remains",
+		"https://api.minimax.io/v1/api/openplatform/coding_plan/remains"
+	]);
+	console.log("MiniMax official endpoint and legacy fallback ok");
+}
+
+{
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ model_remains: [{ model_name: "text-01", current_interval_remaining_percent: 99 }] })
+		})
+	});
+	assert.equal(minimax.status, "invalid-response");
+	assert.deepEqual(minimax.windows, []);
+	console.log("MiniMax ignores non-general model quotas ok");
+}
+
+{
+	const kimi = await collectSubscription("kimi", credentials({ KIMI_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({
+			ok: true,
+			status: 200,
+			json: async () => { throw new SyntaxError("bad json"); }
+		})
+	});
+	assert.equal(kimi.status, "invalid-response");
+	assert.deepEqual(kimi.windows, []);
+	console.log("Token-plan invalid JSON classification ok");
 }
 
 console.log("SUBSCRIPTION TESTS PASSED");

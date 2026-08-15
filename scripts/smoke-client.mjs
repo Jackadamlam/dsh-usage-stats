@@ -26,6 +26,8 @@ globalThis.window = { __ModuleLoader__: { load: (entry) => { captured = entry; }
 globalThis.document = { querySelector: () => null, createElement: () => ({ dataset: {}, appendChild: () => {} }), head: { appendChild: () => {} } };
 
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "client.js"), "utf8");
+if (!source.includes("/api/usage-stats/account")) throw new Error("client must use the unified account endpoint");
+if (source.includes('fetchJson("/api/usage-stats/subscriptions")')) throw new Error("client must not bulk-fetch every subscription provider");
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");
@@ -150,12 +152,15 @@ const translateAccount = (key, params) => {
 };
 const deepseekMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "deepseek-official", displayName: "DeepSeek", accountMode: "balance" },
-	subscription: null,
-	subscriptionLoading: false,
-	subscriptionError: null,
-	balance: { isAvailable: true, currency: "CNY", total: "36.44", toppedUp: "20", granted: "16.44" },
-	balanceState: "ok",
-	balanceMessage: null,
+	account: {
+		id: "deepseek-official",
+		displayName: "DeepSeek",
+		mode: "balance",
+		status: "ok",
+		balance: { remaining: 36.44, currency: "CNY", unlimited: false, breakdown: { toppedUp: 20, granted: 16.44 } }
+	},
+	accountLoading: false,
+	accountError: null,
 	translate: translateAccount,
 	onRetry: () => {}
 }));
@@ -172,12 +177,9 @@ const goSubscription = {
 };
 const goMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription", subscriptionId: "opencode-go" },
-	subscription: goSubscription,
-	subscriptionLoading: false,
-	subscriptionError: null,
-	balance: null,
-	balanceState: "loading",
-	balanceMessage: null,
+	account: { ...goSubscription, mode: "subscription" },
+	accountLoading: false,
+	accountError: null,
 	translate: translateAccount,
 	onRetry: () => {}
 }));
@@ -185,35 +187,41 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+const invalidMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "minimax", displayName: "MiniMax", accountMode: "subscription" },
+	account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [] },
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");
 
 const choices = buildProviderChoices([
-	{ id: "deepseek-official", displayName: "DeepSeek", scheme: "deepseek", configured: true },
-	{ id: "zai-coding-cn", displayName: "Z.ai CN", scheme: "zai", configured: true }
-], [goSubscription, { id: "zai", displayName: "Z.ai", status: "ok", windows: [] }]);
-if (choices.length !== 3) throw new Error(`provider merge must collapse Z.ai aliases, got ${choices.length}`);
+	{ id: "deepseek-official", displayName: "DeepSeek", adapter: "deepseek-balance", accountMode: "balance", configured: true },
+	{ id: "zai-coding-cn", displayName: "Z.ai CN", adapter: "zai-token-plan", accountMode: "subscription", configured: true },
+	{ id: "opencode-go", displayName: "OpenCode Go", adapter: "opencode-go", accountMode: "subscription", configured: true }
+]);
+if (choices.length !== 3) throw new Error(`provider metadata must remain one row per provider, got ${choices.length}`);
 if (choices.find((provider) => provider.id === "zai-coding-cn")?.accountMode !== "subscription") throw new Error("Z.ai must prefer its subscription presentation");
 const selectedMarkup = goMarkup;
 if (selectedMarkup.includes("DeepSeek") || selectedMarkup.includes("Z.ai")) throw new Error("the account area must render only the selected provider");
 console.log("unified single-provider account card ok, balance:", deepseekMarkup.length, "subscription:", goMarkup.length);
 
-// Race regression (P1): usage and balance must each keep their OWN staleness
-// counter, so a balance request issued right after a usage request must NOT
+// Race regression (P1): usage and account must each keep their OWN staleness
+// counter, so an account request issued right after a usage request must NOT
 // invalidate the in-flight usage response.
 const { createLoader, fmtCurrency } = exports_;
 const usageLoader = createLoader();
-const balanceLoader = createLoader();
-const subscriptionLoader = createLoader();
+const accountLoader = createLoader();
 const usageId = usageLoader.start();
-const balanceId = balanceLoader.start();
-const subscriptionId = subscriptionLoader.start();
-if (!usageLoader.isCurrent(usageId)) throw new Error("race: balance start invalidated the usage request");
-if (!balanceLoader.isCurrent(balanceId)) throw new Error("balance request must stay current");
-if (!subscriptionLoader.isCurrent(subscriptionId)) throw new Error("subscription request must stay current");
+const accountId = accountLoader.start();
+if (!usageLoader.isCurrent(usageId)) throw new Error("race: account start invalidated the usage request");
+if (!accountLoader.isCurrent(accountId)) throw new Error("account request must stay current");
 usageLoader.start(); // a newer usage refresh supersedes the old one
 if (usageLoader.isCurrent(usageId)) throw new Error("a newer usage start must supersede the previous usage request");
-if (!balanceLoader.isCurrent(balanceId)) throw new Error("balance must not be affected by usage refreshes");
-if (!subscriptionLoader.isCurrent(subscriptionId)) throw new Error("subscription must not be affected by usage refreshes");
-console.log("loader race regression ok (independent usage/balance counters)");
+if (!accountLoader.isCurrent(accountId)) throw new Error("account must not be affected by usage refreshes");
+console.log("loader race regression ok (independent usage/account counters)");
 
 // Currency formatting must respect the reported currency, not hardcode ¥.
 const cny = fmtCurrency("36.44", "CNY");

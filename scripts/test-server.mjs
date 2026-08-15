@@ -31,13 +31,13 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes } = {}) {
+function makeContext({ sessions, persistence, routes, settings } = {}) {
 	return {
 		logger: { warn: () => {} },
 		credentials: { resolve: async () => void 0 },
 		webServer: { register: (entry) => { routes?.set(entry.path, entry.handler); return () => {}; } },
 		effect: (register) => register(),
-		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : void 0
+		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : void 0
 	};
 }
 
@@ -46,7 +46,7 @@ async function testRouteFence(root) {
 	const routes = new Map();
 	const empty = { list: () => [] };
 	const persistence = { listSnapshots: async () => [], list: async () => [] };
-	plugin.apply(makeContext({ sessions: empty, persistence, routes }));
+	await plugin.apply(makeContext({ sessions: empty, persistence, routes }), {}, { disableBackgroundRefresh: true });
 	const handler = routes.get(plugin.USAGE_PATH);
 	assert.equal(typeof handler, "function");
 
@@ -66,6 +66,88 @@ async function testRouteFence(root) {
 	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, subscriptions);
 	assert.equal(subscriptions.status, 200);
 	assert.deepEqual(JSON.parse(subscriptions.body).subscriptions.map((provider) => provider.status), ["not-configured", "not-configured"]);
+
+	const account = makeResponse();
+	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=deepseek-official`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, account);
+	assert.equal(account.status, 200);
+	assert.equal(JSON.parse(account.body).account.status, "not-configured");
+}
+
+async function testConfigValidation(root) {
+	const plugin = await freshModule("config", join(root, "config"));
+	assert.deepEqual(plugin.Config["~standard"].validate({ monitors: {} }).issues, void 0);
+	assert.match(plugin.Config["~standard"].validate({ monitors: { relay: { adapter: "missing" } } }).issues[0].message, /adapter is unsupported/);
+	const routes = new Map();
+	const context = makeContext({
+		sessions: { list: () => [] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		routes,
+		settings: { get: () => void 0 }
+	});
+	await assert.rejects(
+		() => plugin.apply(context, { monitors: { missing: { adapter: "general" } } }, { disableBackgroundRefresh: true }),
+		/unknown provider: missing/
+	);
+	assert.equal(routes.size, 0, "invalid provider config must fail before routes are registered");
+}
+
+async function testLegacyZaiSubscriptionId(root) {
+	const plugin = await freshModule("legacy-zai", join(root, "legacy-zai"));
+	const routes = new Map();
+	const account = {
+		id: "zai-coding-cn",
+		displayName: "Z.ai CN",
+		mode: "subscription",
+		adapter: "zai-token-plan",
+		status: "ok",
+		windows: []
+	};
+	const accounts = {
+		validate: async () => {},
+		subscriptionAccounts: async () => [account],
+		providerViews: async () => [],
+		get: async () => null,
+		refreshAll: async () => []
+	};
+	await plugin.apply(makeContext({ sessions: { list: () => [] }, persistence: { listSnapshots: async () => [], list: async () => [] }, routes }), {}, {
+		disableBackgroundRefresh: true,
+		accounts
+	});
+	const response = makeResponse();
+	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+	const legacy = JSON.parse(response.body).subscriptions[0];
+	assert.equal(legacy.id, "zai", "0.1.x clients require the canonical Z.ai subscription id");
+	assert.equal(account.id, "zai-coding-cn", "legacy canonicalization must not mutate the account protocol");
+}
+
+async function testBackgroundRefresh(root) {
+	const plugin = await freshModule("background", join(root, "background"));
+	let refreshes = 0;
+	let interval = null;
+	let tick = null;
+	let cleared = false;
+	const ctx = makeContext({
+		sessions: { list: () => [] },
+		persistence: { listSnapshots: async () => [], list: async () => [] }
+	});
+	const cleanup = plugin.startBackgroundRefresh(ctx, {
+		refreshAll: async () => { refreshes += 1; }
+	}, {
+		setInterval: (callback, ms) => {
+			tick = callback;
+			interval = ms;
+			return { unref: () => {} };
+		},
+		clearInterval: () => { cleared = true; }
+	});
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(interval, 300000);
+	assert.equal(refreshes, 1, "background refresh must run immediately at startup");
+	assert.equal(typeof tick, "function");
+	await cleanup.refreshNow();
+	assert.equal(refreshes, 2, "the five-minute timer must refresh accounts again");
+	await cleanup();
+	assert.equal(cleared, true);
 }
 
 async function testPersistedToLive(root) {
@@ -111,6 +193,9 @@ async function testRevisionRewrite(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testConfigValidation(root);
+	await testLegacyZaiSubscriptionId(root);
+	await testBackgroundRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

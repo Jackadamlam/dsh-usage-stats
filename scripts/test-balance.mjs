@@ -37,10 +37,11 @@ async function stubFetchOnce(payload, status = 200) {
 }
 
 {
-	const calls = await stubFetchOnce({ credits: 12.34, total_usage: 56.78 });
-	const balance = await queryBalance("openrouter", "https://openrouter.ai/api/v1", "sk-test");
+	const calls = await stubFetchOnce({ data: { total_credits: 100.5, total_usage: 25.75 } });
+	const balance = await queryBalance("openrouter", "https://openrouter.ai/api/v1", "management-key");
 	assert.equal(calls[0].url, "https://openrouter.ai/api/v1/credits");
-	assert.deepEqual(balance, { isAvailable: true, currency: "USD", total: 12.34, granted: void 0, toppedUp: void 0 });
+	assert.equal(calls[0].init.headers.authorization, "Bearer management-key");
+	assert.deepEqual(balance, { isAvailable: true, currency: "USD", total: 74.75, used: 25.75, limit: 100.5, granted: void 0, toppedUp: void 0 });
 	console.log("openrouter scheme ok:", calls[0].url);
 }
 
@@ -63,9 +64,21 @@ async function stubFetchOnce(payload, status = 200) {
 // Upstream HTTP errors surface as throws.
 {
 	const calls = await stubFetchOnce({}, 429);
-	await assert.rejects(() => queryBalance("deepseek", "https://api.deepseek.com", "sk-test"), /HTTP 429/);
+	await assert.rejects(
+		() => queryBalance("deepseek", "https://api.deepseek.com", "sk-test"),
+		(error) => error.providerStatus === "rate-limited" && error.httpStatus === 429
+	);
 	assert.equal(calls.length, 1);
-	console.log("upstream error propagation ok");
+	console.log("upstream HTTP status classification ok");
+}
+
+{
+	globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad JSON"); } });
+	await assert.rejects(
+		() => queryBalance("deepseek", "https://api.deepseek.com", "sk-test"),
+		(error) => error.providerStatus === "invalid-response"
+	);
+	console.log("upstream JSON error classification ok");
 }
 
 delete globalThis.fetch;
