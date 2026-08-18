@@ -1,0 +1,8 @@
+# usgx-status-bar bundle for DeepSeek Harness (dsh).
+# Inserted into the web profile's composition when this bundle is installed
+# (`dsh plugin --profile web add file:.../usgx-status-bar`). The node half
+# proxies dsh-usage-stats endpoints; the client half renders the enhanced
+# composer status bar under the chat input.
+- insert:
+    - id: usgx-status-bar
+      name: 'usgx-status-bar'

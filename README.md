@@ -4,6 +4,26 @@
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-2da44e)](LICENSE)
 
+> ## 🔄 本分支的迭代（fork 说明）
+>
+> 本仓库是 [Ychris12138/dsh-usage-stats](https://github.com/Ychris12138/dsh-usage-stats) 的 fork，在原作者的能力之上迭代了一个**对话输入框下方的常驻状态条**（`plugins/usgx-status-bar`）：
+>
+> - 原插件的入口是侧边栏底部按钮，会被 DSH-better-sidebar 等侧边栏插件遮挡；
+> - 本分支新增 `usgx-status-bar`：把「今日用量 · 累计 · 缓存命中 · 账户余额」直接显示在**对话输入框正下方**（替换原 stats 行），每 5 分钟自动刷新，余额低值变色；
+> - host 半提供代理端点 `/api/usgx/usage`、`/api/usgx/balance`（转发 usage-stats 的环回端点，浏览器同源访问）；
+> - 依赖：本 profile 需同时安装主插件 `dsh-usage-stats`。
+>
+> 安装 `plugins/usgx-status-bar`：
+>
+> ```bash
+> # 方式一：file 依赖（推荐，源码迭代友好）
+> dsh plugin --profile web add "file:C:/path/to/dsh-usage-stats/plugins/usgx-status-bar"
+> # 方式二：拷入 profile 后安装
+> #  cp -r plugins/usgx-status-bar ~/.dsh/profiles/web/plugins/  && cd ~/.dsh/profiles/web && pnpm install
+> ```
+>
+> 装完重启 `dsh web` 生效。上游更新通过 `git fetch upstream && git merge upstream/main` 跟进。
+
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 网页端提供多供应商账户监测与 Token 用量分析。
 
 Provider balances, subscription quotas, and token-usage analytics for the DeepSeek Harness Web GUI (`dsh web`).
