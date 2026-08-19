@@ -206,9 +206,9 @@ window.__ModuleLoader__.load({
           if (i > 0) segs.push(el('span', { className: 'usgx-n' }, '·'))
           segs.push(el('span', { className: it.cls }, it.text))
         })
-        rows.push(el('div', { className: 'usgx-line2' }, iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', { className: 'usgx-ds' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), ...segs))
+        rows.push(el('div', { className: 'usgx-line2' }, iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', { className: 'usgx-ds' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), ...segs)))
       } else {
-        rows.push(el('div', { className: 'usgx-line2' }, iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', { className: 'usgx-ds' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), el('span', {}, '用量/余额暂不可用')))
+        rows.push(el('div', { className: 'usgx-line2' }, iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', { className: 'usgx-ds' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), el('span', {}, '用量/余额暂不可用'))))
       }
       if (rows.length === 0) return null
       return el('div', { className: 'usgx-bar' }, ...rows)
