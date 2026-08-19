@@ -70,7 +70,10 @@ window.__ModuleLoader__.load({
     //#endregion
 
     //#region StatsBar
-    function StatsBar(props) {
+    /** `ctx` is passed explicitly: the component lives at module scope in this
+     *  bundle (no closure over apply's ctx), so the timer service must arrive
+     *  as a parameter or the render crashes and the entry abdicates. */
+    function StatsBar(ctx, props) {
       const useSession = props.useSession
       const useProjection = props.useProjection
       const nodes = useSession((s) => s.chat.legacy.nodes)
@@ -200,9 +203,10 @@ window.__ModuleLoader__.load({
      *  at a lower priority is the sanctioned replacement (lowest priority renders),
      *  which avoids the "already has an entry with id stats" load error. */
     function apply(ctx) {
+      const render = (props) => StatsBar(ctx, props)
       ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
         { name: 'conversation.composer.dock', id: 'stats', priority: -100 },
-        StatsBar,
+        render,
       ))
     }
     //#endregion
