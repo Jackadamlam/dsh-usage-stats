@@ -195,10 +195,13 @@ window.__ModuleLoader__.load({
     /** Services required by the client plugin body. */
     const inject = ['slots', 'timer']
 
-    /** Client plugin body: replace the composer dock stats line with the enhanced bar. */
+    /** Client plugin body: replace the composer dock stats line with the enhanced bar.
+     *  Shadowing: the shipped stats line occupies id 'stats' at priority 0; the same id
+     *  at a lower priority is the sanctioned replacement (lowest priority renders),
+     *  which avoids the "already has an entry with id stats" load error. */
     function apply(ctx) {
       ctx.slots.inject('conversation.composer.dock', () => ctx.slots.register(
-        { name: 'conversation.composer.dock', id: 'stats' },
+        { name: 'conversation.composer.dock', id: 'stats', priority: -100 },
         StatsBar,
       ))
     }
