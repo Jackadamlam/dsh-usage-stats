@@ -23,6 +23,13 @@ function jsonResponse(value, status = 200, headers = {}) {
 	});
 }
 
+/** Build a fake provider-status error the way lib/accounts.js statusError() does. */
+function statusErrorFromTest(status, message) {
+	const error = new Error(message);
+	error.providerStatus = status;
+	return error;
+}
+
 const now = Date.parse("2026-08-15T00:00:00Z");
 const relay = {
 	id: "relay-a",
@@ -471,6 +478,300 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(account.status, "unavailable", "status transport failures must not use the historical quota unit");
 	assert.equal(account.balance, null);
 	console.log("New API status failures do not silently change quota units");
+}
+
+{
+	// sub2api-auth: reuse the provider's own API key (already configured in the
+	// model) against GET /user/balance — the CC Switch General template.
+	const calls = [];
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), authorization: init?.headers?.authorization });
+			if (String(url).includes("/api/v1/usage/stats")) {
+				return jsonResponse({ code: 0, message: "ok", data: { total_actual_cost: 2.5, total_input_tokens: 100, total_output_tokens: 50 } });
+			}
+			assert.equal(String(url).endsWith("/user/balance"), true);
+			assert.equal(init.headers.authorization, "Bearer sk-relay");
+			return jsonResponse({ balance: 12.5, unit: "USD", planName: "Relay A" });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "balance");
+	assert.equal(account.plan, "Relay A");
+	assert.deepEqual(account.balance, { remaining: 12.5, used: 2.5, currency: "USD", unlimited: false, expiresAt: null });
+	assert.equal(JSON.stringify(account).includes("sk-relay"), false, "provider key must never leak into the snapshot");
+	console.log("sub2api-auth reuses provider API key against /user/balance ok");
+}
+
+{
+	// sub2api-auth: a numeric-string balance and missing currency default to USD.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.equal(String(url).endsWith("/user/balance"), true);
+			return jsonResponse({ balance: "7.25" });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 7.25);
+	assert.equal(account.balance.currency, "USD");
+	console.log("sub2api-auth numeric-string balance and default currency ok");
+}
+
+{
+	// sub2api-auth: missing provider API key is not-configured (never a blind request).
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch without a provider API key"); } });
+	assert.equal(account.status, "not-configured");
+	assert.equal(account.balance, null);
+	console.log("sub2api-auth missing provider key is not-configured ok");
+}
+
+{
+	// sub2api-auth: when /user/balance returns no recognizable numeric balance,
+	// the flow falls back to /v1/usage (same model API key).
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({});
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({ isValid: true, balance: 6.6, unit: "USD", planName: "Panel" });
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "balance");
+	assert.equal(account.balance.remaining, 6.6);
+	assert.equal(account.plan, "Panel");
+	console.log("sub2api-auth /user/balance empty falls back to /v1/usage ok");
+}
+
+{
+	// sub2api-auth: an SPA HTML response for /user/balance (like real panels'
+	// catch-all) is skipped and the panel's /v1/usage is used instead.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return new Response("<!doctype html><title>SPA</title>", {
+				status: 200,
+				headers: { "content-type": "text/html" }
+			});
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({ mode: "unrestricted", isValid: true, remaining: 8.25, unit: "USD", balance: 8.25 });
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 8.25);
+	console.log("sub2api-auth HTML /user/balance falls back to /v1/usage ok");
+}
+
+{
+	// sub2api-auth: when both endpoints fail to yield a balance, the snapshot
+	// stays invalid-response and surfaces the /user/balance top-level keys.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({ message: "nope" });
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({});
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.balance, null);
+	assert.equal(account.reason, "sub2api-balance-shape-unrecognized", "reason must be a fixed enum, never upstream-controlled keys");
+	console.log("sub2api-auth both endpoints missing balance keeps invalid-response ok");
+}
+
+{
+	// sub2api-auth: a nested { code, data: { balance } } envelope is recognized.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({ code: 0, message: "ok", data: { balance: 4.2, unit: "USD" } });
+			if (String(url).endsWith("/v1/usage")) throw new Error("must not fall back when /user/balance already yields a balance");
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 4.2);
+	console.log("sub2api-auth nested data.balance envelope ok");
+}
+
+{
+	// Auto-detection hit: a relay provider with an API key and a public-settings
+	// fingerprint is auto-selected as sub2api-auth and queried with its own key.
+	const probed = [];
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			if (String(url).endsWith("/api/v1/settings/public")) {
+				probed.push(String(url));
+				return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: true } });
+			}
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.ok(String(url).endsWith("/user/balance"));
+			assert.equal(init.headers.authorization, "Bearer sk-relay");
+			return jsonResponse({ balance: 3.5, unit: "USD" });
+		},
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "balance");
+	assert.equal(account.adapter, "sub2api-auth");
+	assert.equal(account.balance.remaining, 3.5);
+	assert.ok(probed.length === 1, "panel probe must run");
+	console.log("sub2api-auth auto-detection fingerprint hit ok");
+}
+
+{
+	// Auto-detection miss: the probe shows it is not a Sub2API panel → unsupported,
+	// no balance query is attempted with the provider key.
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/api/v1/settings/public")) {
+				return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: "yes" } });
+			}
+			throw new Error("must not query non-panel endpoints when the probe misses");
+		},
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "unsupported");
+	assert.equal(account.balance, null);
+	console.log("sub2api-auth auto-detection fingerprint miss ok");
+}
+
+{
+	// Auto-detection is gated on a provider API key: an unkeyed relay is left
+	// unsupported and never probed.
+	let fetched = false;
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({}), {
+		now: () => now,
+		fetch: async () => { fetched = true; throw new Error("must not probe without a provider API key"); },
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "unsupported");
+	assert.equal(fetched, false, "no request must fire without a provider API key");
+	console.log("sub2api-auth auto-detection requires a provider API key ok");
+}
+
+{
+	// An explicit adapter always wins over auto-detection: a provider bound to
+	// `new-api` is never probed or overridden even with a provider API key.
+	let fetched = false;
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/api/v1/settings/public")) { fetched = true; throw new Error("explicit adapter must not be probed"); }
+			if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 500000 } });
+			return jsonResponse({ code: true, data: { total_granted: 10, total_used: 2, total_available: 8 } });
+		},
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.adapter, "new-api");
+	assert.equal(fetched, false, "explicit adapter must bypass the panel probe");
+	console.log("sub2api-auth auto-detection never overrides explicit adapter ok");
+}
+
+{
+	// P1 regression: upstream-controlled JSON property names must never appear
+	// in the normalized snapshot's reason. A hostile panel echoing sensitive
+	// material as an object key (e.g. an API key) must stay out of safeReason.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({ "sk-super-secret-api-key": 1 });
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({});
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.reason, "sub2api-balance-shape-unrecognized", "reason must be a fixed enum");
+	assert.equal(JSON.stringify(account).includes("sk-super-secret-api-key"), false, "upstream-controlled key must never reach the snapshot");
+	console.log("sub2api-auth upstream key names never leak into snapshot ok");
+}
+
+{
+	// P1 regression: the detection cache must live on the service, so two
+	// refresh/query cycles for the same configKey probe the panel only once.
+	let probes = 0;
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [relay],
+		config: { monitors: {} },
+		deps: {
+			now: () => now,
+			fetch: async (url, init) => {
+				if (String(url).endsWith("/api/v1/settings/public")) {
+					probes += 1;
+					return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: true } });
+				}
+				if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+				if (String(url).endsWith("/user/balance")) return jsonResponse({ balance: 1.5, unit: "USD" });
+				throw new Error(`unexpected url: ${url}`);
+			}
+		}
+	});
+	const first = await service.get("relay-a", { force: true });
+	assert.equal(first.adapter, "sub2api-auth");
+	assert.equal(probes, 1, "first cycle must probe exactly once");
+	const second = await service.get("relay-a", { force: true });
+	assert.equal(second.adapter, "sub2api-auth");
+	assert.equal(probes, 1, "second cycle must reuse the persisted detection cache");
+	console.log("sub2api-auth detection cache persists across service refreshes ok");
+}
+
+{
+	// Reviewer suggestion: security-policy/TLS failures on /user/balance must
+	// not be silently swallowed into the /v1/usage fallback — the real error
+	// surfaces instead of being masked.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) {
+				throw statusErrorFromTest("blocked", "account monitor requires HTTPS");
+			}
+			throw new Error(`must not fall back after a security-policy failure: ${url}`);
+		}
+	});
+	assert.equal(account.status, "blocked", "security-policy failures must surface, not fall back");
+	console.log("sub2api-auth security-policy failure not swallowed ok");
 }
 
 {
