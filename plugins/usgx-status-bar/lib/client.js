@@ -169,11 +169,6 @@ window.__ModuleLoader__.load({
         const cls = total < 10 ? 'usgx-bal usgx-low' : (total < 30 ? 'usgx-bal usgx-warn' : 'usgx-bal')
         items.push({ text: '余额 ' + cur + total.toFixed(2), cls })
       }
-      if (today) items.push({ text: '今日 ' + formatTokens(today.tokens) + ' tok', cls: 'usgx-n' })
-      if (u && u.ok && u.total) {
-        items.push({ text: '累计 ' + formatTokens(u.total.tokens) + ' tok', cls: 'usgx-n' })
-        if (typeof u.total.cacheHitRate === 'number') items.push({ text: '缓存 ' + String(u.total.cacheHitRate) + '%', cls: 'usgx-n' })
-      }
 
       const rows = []
       if (parts.length > 0) {
