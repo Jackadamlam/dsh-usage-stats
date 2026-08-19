@@ -10,8 +10,8 @@
 >
 > - 原插件的入口是侧边栏底部按钮，会被 DSH-better-sidebar 等侧边栏插件遮挡；
 > - 本分支新增 `usgx-status-bar`：把「今日用量 · 累计 · 缓存命中 · 账户余额」直接显示在**对话输入框正下方**（替换原 stats 行），每 5 分钟自动刷新，余额低值变色；
-> - host 半提供代理端点 `/api/usgx/usage`、`/api/usgx/balance`（转发 usage-stats 的环回端点，浏览器同源访问）；
-> - 依赖：本 profile 需同时安装主插件 `dsh-usage-stats`。
+> - **自包含（不依赖上游插件）**：用量由本插件自行从会话日志聚合（`plugins/usgx-status-bar/lib/usage.js`，移植自上游纯函数）；余额直接调 DeepSeek 官方 `/user/balance`。**不需要安装 `dsh-usage-stats`**；
+> - host 半提供 `/api/usgx/usage`、`/api/usgx/balance` 端点，浏览器同源访问。
 >
 > 安装 `plugins/usgx-status-bar`：
 >
