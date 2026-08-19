@@ -35,6 +35,21 @@ window.__ModuleLoader__.load({
       '.usgx-link:hover{filter:brightness(1.25);transform:translateY(-1px);}',
       '.usgx-link:focus-visible{outline:2px solid #4D6BFE;outline-offset:1px;}',
       '.usgx-ds{display:inline-flex;align-items:center;gap:6px;}',
+      '.msel-root{position:relative;display:inline-flex;}',
+      '.msel-trigger{display:inline-flex;align-items:center;gap:6px;background:none;border:none;cursor:pointer;color:var(--dsw-alias-label-primary);font-size:13px;padding:4px 8px;border-radius:8px;}',
+      '.msel-trigger:hover{background:var(--dsw-alias-fill-hover,rgba(128,128,128,.12));}',
+      '.msel-effort{color:var(--dsw-alias-label-tertiary);font-size:11px;}',
+      '.msel-chev{color:var(--dsw-alias-label-tertiary);font-size:10px;}',
+      '.msel-menu{position:absolute;top:calc(100% + 4px);right:0;z-index:60;min-width:300px;max-height:400px;overflow:auto;background:var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base));border:1px solid var(--dsw-alias-border-l1);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.25);padding:6px;}',
+      '.msel-gtitle{font-size:11px;color:var(--dsw-alias-label-tertiary);padding:4px 10px 2px;}',
+      '.msel-opt{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:none;cursor:pointer;color:var(--dsw-alias-label-primary);font-size:13px;padding:7px 10px;border-radius:8px;}',
+      '.msel-opt:hover{background:var(--dsw-alias-fill-hover,rgba(128,128,128,.12));}',
+      '.msel-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.msel-coef{flex:0 0 auto;margin-left:auto;color:var(--dsw-alias-label-tertiary);font-size:11px;font-variant-numeric:tabular-nums;}',
+      '.msel-check{flex:0 0 16px;width:16px;color:var(--dsw-alias-label-primary);text-align:center;}',
+      '.msel-back{display:flex;gap:6px;align-items:center;width:100%;background:none;border:none;cursor:pointer;color:var(--dsw-alias-label-secondary);font-size:12px;padding:6px 10px;border-radius:8px;}',
+      '.msel-back:hover{background:var(--dsw-alias-fill-hover,rgba(128,128,128,.12));}',
+      '.msel-status{color:var(--dsw-alias-label-tertiary);font-size:12px;padding:8px 10px;}',
     ].join('')
     const tagId = 'usgx-status-bar/UsageStats.module.css'
     if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(tagId)}]`) === null) {
@@ -215,6 +230,105 @@ window.__ModuleLoader__.load({
     }
     //#endregion
 
+    //#region ModelSeat
+    // Split "Qwen3.8 Max ×1.0" -> { base, coef } so the cost ratio can be
+    // rendered small/gray/right-aligned, separate from the name and the check.
+    function splitCoef(name) {
+      const m = /\s+(×[0-9.]+)\s*$/.exec(name || '')
+      if (!m) return { base: name, coef: null }
+      return { base: name.slice(0, m.index), coef: m[1] }
+    }
+
+    /** Custom composer model seat shadowing the shipped ModelSelect (registered
+     *  at a lower priority so this one renders). */
+    function ModelSeat(props) {
+      const available = props.available
+      const directory = props.directory
+      const load = props.load
+      const select = props.select
+      const [state, setState] = react.useState(() => (directory ? directory.getSnapshot() : { groups: [], current: null, status: 'ready', error: null }))
+      react.useEffect(() => {
+        if (!directory) return
+        return directory.subscribe(() => setState(directory.getSnapshot()))
+      }, [directory])
+      const [open, setOpen] = react.useState(false)
+      const [pane, setPane] = react.useState('model')
+      const rootRef = react.useRef(null)
+
+      react.useEffect(() => { if (available) load() }, [available, load])
+      react.useEffect(() => {
+        if (!open) return
+        const onDown = (e) => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false) }
+        document.addEventListener('mousedown', onDown)
+        return () => document.removeEventListener('mousedown', onDown)
+      }, [open])
+
+      if (!available) return null
+
+      const groups = state.groups || []
+      const current = state.current
+      let cur = null
+      for (const g of groups) for (const m of g.models) {
+        if (current && g.id === current.provider && m.id === current.model) cur = { group: g, model: m }
+      }
+      const curSplit = splitCoef(cur ? cur.model.name : null)
+      const reasoning = cur ? cur.model.reasoning : undefined
+      const effortLabel = reasoning === undefined ? undefined
+        : (current && current.reasoningEffort) || (reasoning && reasoning.defaultEffort) || '默认'
+
+      const choose = (group, model) => {
+        const sel = { provider: group.id, model: model.id }
+        if (model.reasoning && model.reasoning.defaultEffort !== undefined) sel.reasoningEffort = model.reasoning.defaultEffort
+        setOpen(false)
+        void select(sel)
+      }
+
+      const rows = []
+      if (pane === 'model') {
+        if (state.status === 'loading') rows.push(el('div', { className: 'msel-status', key: 'st' }, '加载中…'))
+        if (state.error !== null) rows.push(el('div', { className: 'msel-status', key: 'er' }, '加载失败: ' + state.error))
+        for (const g of groups) {
+          rows.push(el('div', { className: 'msel-gtitle', key: 'g-' + g.id }, g.name))
+          for (const m of g.models) {
+            const sp = splitCoef(m.name)
+            const selected = current && current.provider === g.id && current.model === m.id
+            rows.push(el('button', { type: 'button', key: g.id + '/' + m.id, className: 'msel-opt', onClick: () => choose(g, m) },
+              el('span', { className: 'msel-name' }, sp.base),
+              sp.coef ? el('span', { className: 'msel-coef' }, sp.coef) : null,
+              el('span', { className: 'msel-check' }, selected ? '✓' : ''),
+            ))
+          }
+        }
+        if (groups.length === 0 && state.status !== 'loading') rows.push(el('div', { className: 'msel-status', key: 'empty' }, '无可用模型'))
+      } else {
+        rows.push(el('button', { type: 'button', className: 'msel-back', key: 'back', onClick: () => setPane('model') }, '‹ 返回模型'))
+        if (reasoning) for (const ef of (reasoning.efforts || [])) {
+          const active = current && current.reasoningEffort === ef.id
+          rows.push(el('button', { type: 'button', key: 'ef-' + ef.id, className: 'msel-opt',
+            onClick: () => { if (current) { void select({ provider: current.provider, model: current.model, reasoningEffort: ef.id }); setOpen(false) } } },
+            el('span', { className: 'msel-name' }, ef.name || ef.id),
+            el('span', { className: 'msel-check' }, active ? '✓' : ''),
+          ))
+        }
+      }
+
+      return el('div', { className: 'msel-root', ref: rootRef },
+        el('button', { type: 'button', className: 'msel-trigger',
+          onClick: () => { const next = !open; setOpen(next); setPane('model'); if (next) load() } },
+          el('span', {}, curSplit.base || '选择模型'),
+          effortLabel !== undefined ? el('span', { className: 'msel-effort' }, effortLabel) : null,
+          el('span', { className: 'msel-chev' }, open ? '▴' : '▾'),
+        ),
+        open ? el('div', { className: 'msel-menu' },
+          (reasoning !== undefined && pane === 'model')
+            ? el('button', { type: 'button', className: 'msel-back', key: 'toeff', onClick: () => setPane('effort') }, '思考强度: ' + effortLabel + ' ›')
+            : null,
+          ...rows,
+        ) : null,
+      )
+    }
+    //#endregion
+
     //#region plugin body
     /** Services required by the client plugin body. */
     const inject = ['slots', 'timer']
@@ -229,6 +343,10 @@ window.__ModuleLoader__.load({
         { name: 'conversation.composer.dock', id: 'stats', priority: -100 },
         render,
       ))
+      // NOTE: model-seat takeover removed — the shipped ModelSelect's business
+      // face (directory/load/select) is bound to its own registration and is not
+      // passed to a shadowing occupant, so a custom seat renders empty and hides
+      // the trigger. Keep the built-in selector; the cost ratio stays in the name.
     }
     //#endregion
 
