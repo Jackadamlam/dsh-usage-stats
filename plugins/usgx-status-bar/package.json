@@ -1,6 +1,6 @@
 {
   "name": "usgx-status-bar",
-  "description": "Enhanced composer status bar for the DSH web GUI: one-line session stats plus clickable brand icons (DeepSeek whale -> usage page, Qwen -> TokenPlan subscription) with today's usage and account balance (proxies dsh-usage-stats endpoints).",
+  "description": "Enhanced composer status bar for the DSH web GUI: one-line session stats plus clickable brand icons (Qwen site icon first -> TokenPlan subscription, DeepSeek whale grouped with its usage stats -> usage page) with today's usage and account balance (proxies dsh-usage-stats endpoints).",
   "version": "1.0.0",
   "type": "module",
   "main": "lib/index.js",

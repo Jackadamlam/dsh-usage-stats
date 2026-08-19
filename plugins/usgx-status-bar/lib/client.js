@@ -5,9 +5,10 @@
  * composer status bar under the chat input (`conversation.composer.dock`),
  * replacing the shipped stats line with
  *   line 1: session time/token stats (one line)
- *   line 2: clickable brand icons (DeepSeek whale -> platform usage page,
- *           Qwen -> TokenPlan subscription page) + today's usage / cumulative /
- *           cache hit / account balance (one line), refreshed every 5 minutes
+ *   line 2: Qwen TokenPlan icon (the console's real favicon, -> subscription
+ *           page) first, then the DeepSeek whale (-> platform usage page)
+ *           atomically grouped with today's usage / cumulative / cache hit /
+ *           account balance (one line), refreshed every 5 minutes
  * Data comes from the server half's /api/usgx/* proxy endpoints via
  * same-origin fetch.
  */
@@ -33,6 +34,7 @@ window.__ModuleLoader__.load({
       '.usgx-link{color:inherit;text-decoration:none;border-radius:4px;transition:filter .12s ease,transform .12s ease;}',
       '.usgx-link:hover{filter:brightness(1.25);transform:translateY(-1px);}',
       '.usgx-link:focus-visible{outline:2px solid #4D6BFE;outline-offset:1px;}',
+      '.usgx-ds{display:inline-flex;align-items:center;gap:6px;}',
     ].join('')
     const tagId = 'usgx-status-bar/UsageStats.module.css'
     if (typeof document !== 'undefined' && document.querySelector(`style[data-plugin-css=${JSON.stringify(tagId)}]`) === null) {
@@ -56,17 +58,10 @@ window.__ModuleLoader__.load({
     const DS_USAGE_URL = 'https://platform.deepseek.com/usage'
     const QWEN_TOKENPLAN_URL = 'https://platform.qianwenai.com/home/billing/subscription/token-plan-individual'
 
-    // Qwen mark: brand-gradient disc with a white "Q" (ring + tail), drawn
-    // with pure shapes so it stays crisp at 16px without font dependencies.
-    const qwen = el('svg', { viewBox: '0 0 16 16', width: 16, height: 16, 'aria-hidden': true, style: { display: 'block' } },
-      el('defs', {},
-        el('linearGradient', { id: 'usgx-qwen-grad', x1: '0', y1: '0', x2: '1', y2: '1' },
-          el('stop', { offset: '0%', stopColor: '#7A5CFF' }),
-          el('stop', { offset: '100%', stopColor: '#4D6BFE' }))),
-      el('circle', { cx: 8, cy: 8, r: 8, fill: 'url(#usgx-qwen-grad)' }),
-      el('circle', { cx: 7.3, cy: 7.3, r: 3.1, fill: 'none', stroke: '#fff', strokeWidth: 1.7 }),
-      el('line', { x1: 9.6, y1: 9.6, x2: 11.8, y2: 11.8, stroke: '#fff', strokeWidth: 1.7, strokeLinecap: 'round' }),
-    )
+    // Qwen cloud console favicon — the exact icon the TokenPlan page serves,
+    // referenced straight from the CDN so it always matches the site.
+    const QWEN_ICON_URL = 'https://img.alicdn.com/imgextra/i4/O1CN01W9GrLX1GOnvqd6zGw_!!6000000000613-55-tps-28-28.svg'
+    const qwen = el('img', { src: QWEN_ICON_URL, width: 16, height: 16, alt: '', draggable: false, style: { display: 'block' } })
 
     /** Brand icon wrapped in an external link (opens in a new tab). */
     const iconLink = (href, title, icon) => el('a', {
@@ -211,9 +206,9 @@ window.__ModuleLoader__.load({
           if (i > 0) segs.push(el('span', { className: 'usgx-n' }, '·'))
           segs.push(el('span', { className: it.cls }, it.text))
         })
-        rows.push(el('div', { className: 'usgx-line2' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), ...segs))
+        rows.push(el('div', { className: 'usgx-line2' }, iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', { className: 'usgx-ds' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), ...segs))
       } else {
-        rows.push(el('div', { className: 'usgx-line2' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', {}, '用量/余额暂不可用')))
+        rows.push(el('div', { className: 'usgx-line2' }, iconLink(QWEN_TOKENPLAN_URL, '千问 TokenPlan 余量', qwen), el('span', { className: 'usgx-ds' }, iconLink(DS_USAGE_URL, 'DeepSeek 用量', whale), el('span', {}, '用量/余额暂不可用')))
       }
       if (rows.length === 0) return null
       return el('div', { className: 'usgx-bar' }, ...rows)
