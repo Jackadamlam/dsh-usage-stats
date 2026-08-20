@@ -1,0 +1,130 @@
+name: Finalize v0.2.7
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/finalize-v0.2.7.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="0100f0bc4271301c88bfc6dc3d12719f1ed4e283"
+          git cat-file -e "${target}^{commit}"
+          pkg="$(git show "${target}:package.json")"
+          node -e 'const p=JSON.parse(process.argv[1]); if(p.name!=="@ychris12138/dsh-usage-stats"||p.version!=="0.2.7") process.exit(1)' "$pkg"
+          catalog="$(git show "${target}:catalog/v1/plugins.json")"
+          node -e 'const p=JSON.parse(process.argv[1]); if(p.revision!=="0.2.7"||p.items?.[0]?.latestVersion!=="0.2.7"||p.items?.[0]?.package?.name!=="@ychris12138/dsh-usage-stats") process.exit(1)' "$catalog"
+          patch="$(git show "${target}:cordis.patch.yml")"
+          printf '%s\n' "$patch" | grep -F 'name: "@ychris12138/dsh-usage-stats"'
+
+      - name: Create annotated v0.2.7 tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="0100f0bc4271301c88bfc6dc3d12719f1ed4e283"
+          git fetch --tags --force
+          if git show-ref --verify --quiet refs/tags/v0.2.7; then
+            existing="$(git rev-list -n 1 v0.2.7)"
+            test "$existing" = "$target"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a v0.2.7 "$target" -m "dsh-usage-stats v0.2.7"
+            git push origin refs/tags/v0.2.7
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.2.7 >/dev/null 2>&1; then
+            exit 0
+          fi
+          cat > /tmp/release-notes.md <<'EOF'
+          ## dsh-usage-stats v0.2.7
+
+          Hotfix release for the first public scoped npm package.
+
+          ### Fix
+          - Quotes the scoped package name in `cordis.patch.yml`, fixing the YAML parse failure that prevented DSH from starting after installing v0.2.6 (#47, #48).
+          - Adds regression coverage that rejects an unquoted scoped package name in the bundle patch.
+
+          ### Validation
+          - `npm ci`, `npm run check`, `npm test`, and `npm pack --dry-run` passed.
+          - Verified with Node 24.14.1 and `@deepseek-ai/dsh@0.1.0-rc.8` in an isolated profile.
+          - DSH Web started successfully and `/api/usage-stats/providers` returned HTTP 200 with valid JSON.
+          - npm package: `@ychris12138/dsh-usage-stats@0.2.7`.
+          - v0.2.6 has been deprecated on npm; users should upgrade to v0.2.7 or later.
+          EOF
+          gh release create v0.2.7 \
+            --verify-tag \
+            --title "v0.2.7" \
+            --notes-file /tmp/release-notes.md
+
+      - name: Verify Pages catalog is on v0.2.7
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import json, time, urllib.request
+
+          urls = [
+              "https://ychris12138.github.io/dsh-usage-stats/catalog-source.json",
+              "https://ychris12138.github.io/dsh-usage-stats/v1/plugins",
+          ]
+
+          last = None
+          for attempt in range(30):
+              try:
+                  values = []
+                  for url in urls:
+                      req = urllib.request.Request(url, headers={"User-Agent": "dsh-usage-stats-release-verifier/0.2.7"})
+                      with urllib.request.urlopen(req, timeout=15) as response:
+                          ctype = response.headers.get("Content-Type", "")
+                          if "application/json" not in ctype.lower():
+                              raise RuntimeError(f"unexpected content type for {url}: {ctype}")
+                          values.append(json.loads(response.read().decode("utf-8")))
+                  source, page = values
+                  assert source["providerId"] == "ychris12138-dsh-usage-stats"
+                  assert page["revision"] == "0.2.7"
+                  assert page["items"][0]["latestVersion"] == "0.2.7"
+                  assert page["items"][0]["package"]["name"] == "@ychris12138/dsh-usage-stats"
+                  print("Pages catalog v0.2.7 verified")
+                  break
+              except Exception as exc:
+                  last = exc
+                  if attempt == 29:
+                      raise
+                  time.sleep(10)
+          PY
+
+      - name: Remove one-shot workflow
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          path='.github/workflows/finalize-v0.2.7.yml'
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=main" --jq .sha)"
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/contents/${path}" \
+            -f message='chore: remove v0.2.7 release finalizer' \
+            -f sha="$sha" \
+            -f branch=main
