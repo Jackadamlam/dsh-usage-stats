@@ -17,34 +17,49 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Query 1024Store and persist temporary result
+      - name: Fetch current 1024Store registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          if curl -fsSL --retry 3 --retry-delay 2 --max-time 60 \
+            'https://deepseek1024.com/api/v1/plugins' -o /tmp/registry.json; then
+            echo ok > /tmp/fetch-status
+          else
+            echo failed > /tmp/fetch-status
+            printf '{"packages":[]}\n' > /tmp/registry.json
+          fi
+
+      - name: Build temporary result
         shell: bash
         run: |
           set -euo pipefail
           node <<'NODE'
           const fs = require('fs');
-          const result = { checkedAt: new Date().toISOString(), outcome: 'unavailable', detail: null, npmMethods: [] };
-          try {
-            const response = await fetch('https://deepseek1024.com/api/v1/plugins', { redirect: 'follow', cache: 'no-store' });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            const data = await response.json();
+          const fetchStatus = fs.readFileSync('/tmp/fetch-status', 'utf8').trim();
+          const result = {
+            checkedAt: new Date().toISOString(),
+            outcome: fetchStatus === 'ok' ? 'missing' : 'unavailable',
+            detail: fetchStatus === 'ok' ? 'catalog record not found' : '1024Store API fetch failed',
+            npmMethods: [],
+          };
+          if (fetchStatus === 'ok') {
+            const data = JSON.parse(fs.readFileSync('/tmp/registry.json', 'utf8'));
             const entries = Array.isArray(data.packages) ? data.packages : [];
             const target = entries.find(item => {
               const url = typeof item?.url === 'string' ? item.url.toLowerCase().replace(/\.git$/, '') : '';
               const id = typeof item?.id === 'string' ? item.id.toLowerCase() : '';
               return url === 'https://github.com/ychris12138/dsh-usage-stats' || id === 'ychris12138/dsh-usage-stats';
             });
-            if (!target) {
-              result.outcome = 'missing';
-              result.detail = 'catalog record not found';
-            } else {
+            if (target) {
               const methods = Array.isArray(target.installMethods) ? target.installMethods : [];
-              result.npmMethods = methods.filter(m => m && typeof m === 'object' && m.kind === 'npm' && m.spec === '@ychris12138/dsh-usage-stats').map(m => ({
-                revision: m.revision ?? null,
-                verification: m.verification ?? null,
-                code: m.code ?? null,
-                requiresBuildAllowance: m.requiresBuildAllowance ?? null,
-              }));
+              result.npmMethods = methods
+                .filter(m => m && typeof m === 'object' && m.kind === 'npm' && m.spec === '@ychris12138/dsh-usage-stats')
+                .map(m => ({
+                  revision: m.revision ?? null,
+                  verification: m.verification ?? null,
+                  code: m.code ?? null,
+                  requiresBuildAllowance: m.requiresBuildAllowance ?? null,
+                }));
               const exact = result.npmMethods.some(m => m.revision === '0.2.8'
                 && m.verification === 'verified'
                 && m.code === 'repository_backlink'
@@ -54,11 +69,9 @@ jobs:
                 ? 'reviewed repository_backlink target is 0.2.8'
                 : 'record exists but exact reviewed repository_backlink target is not 0.2.8 yet';
             }
-          } catch (error) {
-            result.detail = error instanceof Error ? error.message : String(error);
           }
           fs.writeFileSync('.tmp-1024store-v0.2.8-result.json', JSON.stringify(result, null, 2) + '\n');
-          console.log(result);
+          console.log(JSON.stringify(result, null, 2));
           NODE
 
       - name: Replace verifier with temporary result
