@@ -1,5 +1,6 @@
 name: Deploy Community Market catalog
 
+# Keep this workflow in main so catalog changes deploy automatically after Pages is enabled.
 on:
   push:
     branches: [main]
