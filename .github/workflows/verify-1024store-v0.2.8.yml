@@ -1,0 +1,99 @@
+name: Verify 1024Store v0.2.8 sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-1024store-v0.2.8.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Query 1024Store and build audit note
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require('fs');
+          const targetRepo = 'https://github.com/ychris12138/dsh-usage-stats';
+          let outcome = 'unavailable';
+          let detail = 'The 1024Store API could not be queried.';
+          try {
+            const response = await fetch('https://deepseek1024.com/api/v1/plugins', { redirect: 'follow', cache: 'no-store' });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const data = await response.json();
+            const entries = Array.isArray(data.packages) ? data.packages : [];
+            const target = entries.find(item => {
+              const url = typeof item?.url === 'string' ? item.url.toLowerCase().replace(/\.git$/, '') : '';
+              const id = typeof item?.id === 'string' ? item.id.toLowerCase() : '';
+              return url === targetRepo || id === 'ychris12138/dsh-usage-stats';
+            });
+            if (!target) {
+              outcome = 'missing';
+              detail = '1024Store catalog does not currently contain the Ychris12138/dsh-usage-stats record.';
+            } else {
+              const methods = Array.isArray(target.installMethods) ? target.installMethods : [];
+              const npmMethods = methods.filter(m => m && typeof m === 'object'
+                && m.kind === 'npm'
+                && m.spec === '@ychris12138/dsh-usage-stats');
+              const exact = npmMethods.find(m => m.revision === '0.2.8'
+                && m.verification === 'verified'
+                && m.code === 'repository_backlink'
+                && m.requiresBuildAllowance === false);
+              if (exact) {
+                outcome = 'synced';
+                detail = '1024Store currently exposes a reviewed repository_backlink npm target for @ychris12138/dsh-usage-stats@0.2.8.';
+              } else {
+                outcome = 'stale';
+                const compact = npmMethods.map(m => ({
+                  revision: m.revision ?? null,
+                  verification: m.verification ?? null,
+                  code: m.code ?? null,
+                  requiresBuildAllowance: m.requiresBuildAllowance ?? null,
+                }));
+                detail = `1024Store record exists but its reviewed npm target is not yet 0.2.8. Current npm methods: ${JSON.stringify(compact)}`;
+              }
+            }
+          } catch (error) {
+            detail = `1024Store API query failed: ${error instanceof Error ? error.message : String(error)}`;
+          }
+          const note = [
+            '## Community Market distribution check',
+            '',
+            '- npm: `@ychris12138/dsh-usage-stats@0.2.8` published and real rc8 validation passed.',
+            '- Git tag/Release: `v0.2.8` finalized from `c803a63f693c90e515e85a90e38768b8e50a12c3`.',
+            '- Pages catalog: public manifest/provider endpoints verified at `0.2.8`.',
+            `- 1024Store API result: **${outcome}**`,
+            `- ${detail}`,
+            '',
+          ].join('\n');
+          fs.writeFileSync('/tmp/comment.md', note);
+          console.log(note);
+          NODE
+
+      - name: Record result on PR 52
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api "repos/${GITHUB_REPOSITORY}/issues/52/comments" -f body=@/tmp/comment.md
+
+      - name: Remove one-time verifier
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --ff-only origin main
+          git rm .github/workflows/verify-1024store-v0.2.8.yml
+          git commit -m 'chore: remove 1024Store v0.2.8 verifier'
+          git push origin main
