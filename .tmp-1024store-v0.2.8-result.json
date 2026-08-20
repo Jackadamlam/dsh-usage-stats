@@ -1,0 +1,19 @@
+{
+  "checkedAt": "2026-08-20T08:22:58.999Z",
+  "outcome": "stale",
+  "detail": "record exists but exact reviewed repository_backlink target is not 0.2.8 yet",
+  "npmMethods": [
+    {
+      "revision": "0.2.7",
+      "verification": "verified",
+      "code": "published_package",
+      "requiresBuildAllowance": false
+    },
+    {
+      "revision": "0.2.7",
+      "verification": "verified",
+      "code": "repository_backlink",
+      "requiresBuildAllowance": false
+    }
+  ]
+}
