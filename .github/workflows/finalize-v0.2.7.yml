@@ -88,7 +88,6 @@ jobs:
               "https://ychris12138.github.io/dsh-usage-stats/v1/plugins",
           ]
 
-          last = None
           for attempt in range(30):
               try:
                   values = []
@@ -100,14 +99,13 @@ jobs:
                               raise RuntimeError(f"unexpected content type for {url}: {ctype}")
                           values.append(json.loads(response.read().decode("utf-8")))
                   source, page = values
-                  assert source["providerId"] == "ychris12138-dsh-usage-stats"
+                  assert source["providerId"] == "io.github.ychris12138.dsh-usage-stats"
                   assert page["revision"] == "0.2.7"
                   assert page["items"][0]["latestVersion"] == "0.2.7"
                   assert page["items"][0]["package"]["name"] == "@ychris12138/dsh-usage-stats"
                   print("Pages catalog v0.2.7 verified")
                   break
-              except Exception as exc:
-                  last = exc
+              except Exception:
                   if attempt == 29:
                       raise
                   time.sleep(10)
