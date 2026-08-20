@@ -1,0 +1,97 @@
+name: Verify 1024Store v0.2.8 sync
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-1024store-v0.2.8.yml
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Query current 1024Store catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          outcome='unavailable'
+          detail='The 1024Store API could not be queried.'
+          if curl -fsSL --retry 3 --retry-delay 2 --max-time 45 \
+            'https://deepseek1024.com/api/v1/plugins' -o /tmp/registry.json; then
+            node <<'NODE' > /tmp/result.env
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('/tmp/registry.json', 'utf8'));
+          const entries = Array.isArray(data.packages) ? data.packages : [];
+          const target = entries.find(item => {
+            const url = typeof item?.url === 'string' ? item.url.toLowerCase().replace(/\.git$/, '') : '';
+            const id = typeof item?.id === 'string' ? item.id.toLowerCase() : '';
+            return url === 'https://github.com/ychris12138/dsh-usage-stats'
+              || id === 'ychris12138/dsh-usage-stats';
+          });
+          if (!target) {
+            console.log('OUTCOME=missing');
+            console.log('DETAIL=1024Store catalog does not currently contain the Ychris12138/dsh-usage-stats record.');
+            process.exit(0);
+          }
+          const methods = Array.isArray(target.installMethods) ? target.installMethods : [];
+          const npmMethods = methods.filter(m => m && typeof m === 'object'
+            && m.kind === 'npm'
+            && m.spec === '@ychris12138/dsh-usage-stats');
+          const exact = npmMethods.find(m => m.revision === '0.2.8'
+            && m.verification === 'verified'
+            && m.code === 'repository_backlink'
+            && m.requiresBuildAllowance === false);
+          const compact = npmMethods.map(m => ({
+            revision: m.revision ?? null,
+            verification: m.verification ?? null,
+            code: m.code ?? null,
+            requiresBuildAllowance: m.requiresBuildAllowance ?? null,
+          }));
+          if (exact) {
+            console.log('OUTCOME=synced');
+            console.log('DETAIL=1024Store currently exposes a reviewed repository_backlink npm target for @ychris12138/dsh-usage-stats@0.2.8.');
+          } else {
+            console.log('OUTCOME=stale');
+            console.log(`DETAIL=1024Store record exists but its reviewed npm target is not yet 0.2.8. Current npm methods: ${JSON.stringify(compact).replace(/%/g,'%25').replace(/\n/g,'%0A').replace(/\r/g,'%0D')}`);
+          }
+          NODE
+            source /tmp/result.env
+            outcome="$OUTCOME"
+            detail="$DETAIL"
+          fi
+          {
+            echo '## Community Market distribution check'
+            echo
+            echo "- npm: \`@ychris12138/dsh-usage-stats@0.2.8\` published and real rc8 validation passed."
+            echo "- Git tag/Release: \`v0.2.8\` finalized from \`c803a63f693c90e515e85a90e38768b8e50a12c3\`."
+            echo "- Pages catalog: public manifest/provider endpoints verified at \`0.2.8\`."
+            echo "- 1024Store API result: **${outcome}**"
+            echo "- ${detail}"
+          } > /tmp/comment.md
+          cat /tmp/comment.md
+
+      - name: Record result on release PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment 52 --body-file /tmp/comment.md
+
+      - name: Remove one-time verifier
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --ff-only origin main
+          git rm .github/workflows/verify-1024store-v0.2.8.yml
+          git commit -m 'chore: remove 1024Store v0.2.8 verifier'
+          git push origin main
