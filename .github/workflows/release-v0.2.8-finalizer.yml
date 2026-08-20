@@ -1,0 +1,117 @@
+name: Finalize v0.2.8 release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/release-v0.2.8-finalizer.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: c803a63f693c90e515e85a90e38768b8e50a12c3
+      TAG: v0.2.8
+      PACKAGE: '@ychris12138/dsh-usage-stats'
+      VERSION: 0.2.8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tested release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "$TARGET_SHA^{commit}"
+          test "$(git show "$TARGET_SHA:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).name))')" = "$PACKAGE"
+          test "$(git show "$TARGET_SHA:package.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).version))')" = "$VERSION"
+          git show "$TARGET_SHA:lib/client.js" | grep -F 'id: "@ychris12138/dsh-usage-stats"'
+          test "$(git show "$TARGET_SHA:catalog/v1/plugins.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).revision))')" = "$VERSION"
+
+      - name: Create exact annotated tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$TARGET_SHA"
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$TAG" "$TARGET_SHA" -m "$TAG — scoped client loader hotfix"
+            git push origin "refs/tags/$TAG"
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            cat > /tmp/release-notes.md <<'EOF'
+          ## v0.2.8 — DSH Desktop client loader hotfix
+
+          Fixes the scoped npm package client-module identity introduced during the npm/Community Market migration.
+
+          ### Fixed
+          - Register the browser bundle as `@ychris12138/dsh-usage-stats` via `__ModuleLoader__.load(...)` instead of the legacy unscoped `dsh-usage-stats` id.
+          - Make the client smoke test derive the expected loader id from `package.json.name`, preventing future package-name drift.
+
+          ### Validation
+          - `npm ci`, `npm run check`, `npm test`, and `npm pack --dry-run` passed on the release commit.
+          - Real end-to-end validation passed with Node 24.14.1 and `@deepseek-ai/dsh@0.1.0-rc.8`.
+          - The scoped Cordis bundle loaded successfully, the browser loaded `/plugins/@ychris12138/dsh-usage-stats/client.js`, the Usage Stats sidebar entry appeared, the panel opened normally, and `/api/usage-stats/providers` returned HTTP 200.
+          - A full DSH stop/restart and a fresh browser session completed without `loaded without registering`, `Failed to load plugins`, warnings, or errors.
+
+          `0.2.7` is deprecated on npm; upgrade to `0.2.8` or later.
+          EOF
+            gh release create "$TAG" --target "$TARGET_SHA" --title 'v0.2.8 — DSH Desktop client loader hotfix' --notes-file /tmp/release-notes.md
+          fi
+
+      - name: Verify public Pages catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const urls = [
+            'https://ychris12138.github.io/dsh-usage-stats/catalog-source.json',
+            'https://ychris12138.github.io/dsh-usage-stats/v1/plugins',
+          ];
+          const sleep = ms => new Promise(r => setTimeout(r, ms));
+          for (let attempt = 1; attempt <= 15; attempt++) {
+            try {
+              const [manifestRes, pageRes] = await Promise.all(urls.map(url => fetch(url, { redirect: 'follow', cache: 'no-store' })));
+              if (!manifestRes.ok || !pageRes.ok) throw new Error(`HTTP ${manifestRes.status}/${pageRes.status}`);
+              if (!manifestRes.headers.get('content-type')?.includes('application/json')) throw new Error('manifest MIME');
+              if (!pageRes.headers.get('content-type')?.includes('application/json')) throw new Error('provider MIME');
+              const manifest = await manifestRes.json();
+              const page = await pageRes.json();
+              if (manifest.providerId !== 'io.github.ychris12138.dsh-usage-stats') throw new Error('providerId');
+              if (page.revision !== '0.2.8') throw new Error(`revision=${page.revision}`);
+              if (page.items?.[0]?.latestVersion !== '0.2.8') throw new Error('latestVersion');
+              if (page.items?.[0]?.package?.name !== '@ychris12138/dsh-usage-stats') throw new Error('package');
+              console.log('Pages catalog verified at 0.2.8');
+              process.exit(0);
+            } catch (error) {
+              console.log(`Pages verification attempt ${attempt} failed: ${error.message}`);
+              if (attempt === 15) throw error;
+              await sleep(8000);
+            }
+          }
+          NODE
+
+      - name: Remove one-time finalizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git pull --ff-only origin main
+          git rm .github/workflows/release-v0.2.8-finalizer.yml
+          git commit -m 'chore: remove v0.2.8 release finalizer'
+          git push origin main
