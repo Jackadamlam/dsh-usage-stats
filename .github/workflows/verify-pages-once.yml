@@ -1,0 +1,73 @@
+name: Verify Community Market Pages once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/verify-pages-once.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify public catalog endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_url='https://ychris12138.github.io/dsh-usage-stats/catalog-source.json'
+          page_url='https://ychris12138.github.io/dsh-usage-stats/v1/plugins'
+
+          fetch_json() {
+            local url="$1" body="$2" headers="$3"
+            for i in $(seq 1 24); do
+              if curl --fail --location --silent --show-error \
+                --connect-timeout 10 --max-time 20 \
+                -D "$headers" -o "$body" "$url"; then
+                if grep -qi '^content-type: *application/[^;]*json' "$headers"; then
+                  return 0
+                fi
+              fi
+              sleep 5
+            done
+            echo "endpoint did not become healthy: $url" >&2
+            cat "$headers" >&2 || true
+            exit 1
+          }
+
+          fetch_json "$source_url" /tmp/source.json /tmp/source.headers
+          fetch_json "$page_url" /tmp/page.json /tmp/page.headers
+
+          node <<'NODE'
+          const fs = require('fs');
+          const source = JSON.parse(fs.readFileSync('/tmp/source.json', 'utf8'));
+          const page = JSON.parse(fs.readFileSync('/tmp/page.json', 'utf8'));
+          if (source.manifestVersion !== '1.0.0') throw new Error('unexpected manifestVersion');
+          if (source.providerId !== 'io.github.ychris12138.dsh-usage-stats') throw new Error('unexpected providerId');
+          if (source.transport?.endpoint !== 'https://ychris12138.github.io/dsh-usage-stats/v1/plugins') throw new Error('unexpected transport endpoint');
+          if (page.schemaVersion !== '1.0.0') throw new Error('unexpected provider schemaVersion');
+          if (page.revision !== '0.2.6') throw new Error('unexpected catalog revision');
+          if (page.items?.[0]?.latestVersion !== '0.2.6') throw new Error('unexpected latestVersion');
+          if (page.items?.[0]?.package?.name !== '@ychris12138/dsh-usage-stats') throw new Error('unexpected npm package name');
+          console.log('Community Market Pages endpoints verified.');
+          NODE
+
+      - name: Remove one-shot verifier
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          path='.github/workflows/verify-pages-once.yml'
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=main" --jq .sha)"
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/contents/${path}" \
+            -f message='chore: remove successful Pages verifier' \
+            -f sha="$sha" \
+            -f branch=main
