@@ -1,0 +1,102 @@
+name: Finalize v0.2.10 release
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/release-finalize-v0.2.10.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    env:
+      TARGET_SHA: 8578107d39f61afc3aebfe55f409d4d0a6cde73c
+      TAG: v0.2.10
+      VERSION: 0.2.10
+      PACKAGE: '@ychris12138/dsh-usage-stats'
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release target and npm publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          git cat-file -e "${TARGET_SHA}^{commit}"
+          test "$(git show "${TARGET_SHA}:package.json" | jq -r .version)" = "$VERSION"
+          test "$(npm view "$PACKAGE" version --registry=https://registry.npmjs.org/)" = "$VERSION"
+
+      - name: Create and verify annotated tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            ACTUAL="$(git rev-list -n1 "$TAG")"
+            test "$ACTUAL" = "$TARGET_SHA"
+          else
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git tag -a "$TAG" "$TARGET_SHA" -m "$TAG"
+            git push origin "refs/tags/$TAG"
+          fi
+          test "$(git rev-list -n1 "$TAG")" = "$TARGET_SHA"
+
+      - name: Create or verify GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            test "$(gh release view "$TAG" --json tagName --jq .tagName)" = "$TAG"
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "$TAG" \
+              --notes $'## Highlights\n\n- Add Ollama Cloud subscription quota support (5-hour and weekly windows).\n- Recognize configured Ollama Cloud providers by canonical host while preserving custom provider IDs.\n- Avoid synthetic/unconfigured Ollama accounts and local Ollama false positives.\n- Add regression coverage for parsing, auth/error mapping, custom endpoints, account integration, and secret handling.\n\nIncludes community contribution from PR #55.'
+          fi
+
+      - name: Verify public Pages catalog
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_url='https://ychris12138.github.io/dsh-usage-stats/catalog-source.json'
+          plugins_url='https://ychris12138.github.io/dsh-usage-stats/v1/plugins'
+          ok=0
+          for _ in $(seq 1 30); do
+            source_headers="$(mktemp)"
+            plugins_headers="$(mktemp)"
+            source_body="$(mktemp)"
+            plugins_body="$(mktemp)"
+            source_code="$(curl -L -sS -D "$source_headers" -o "$source_body" -w '%{http_code}' "$source_url" || true)"
+            plugins_code="$(curl -L -sS -D "$plugins_headers" -o "$plugins_body" -w '%{http_code}' "$plugins_url" || true)"
+            if [ "$source_code" = 200 ] && [ "$plugins_code" = 200 ] \
+              && grep -qi '^content-type:.*application/json' "$source_headers" \
+              && grep -qi '^content-type:.*application/json' "$plugins_headers" \
+              && [ "$(jq -r .providerId "$source_body" 2>/dev/null || true)" = 'io.github.ychris12138.dsh-usage-stats' ] \
+              && [ "$(jq -r .revision "$plugins_body" 2>/dev/null || true)" = "$VERSION" ] \
+              && [ "$(jq -r '.items[0].latestVersion' "$plugins_body" 2>/dev/null || true)" = "$VERSION" ] \
+              && [ "$(jq -r '.items[0].package.name' "$plugins_body" 2>/dev/null || true)" = "$PACKAGE" ]; then
+              ok=1
+              rm -f "$source_headers" "$plugins_headers" "$source_body" "$plugins_body"
+              break
+            fi
+            rm -f "$source_headers" "$plugins_headers" "$source_body" "$plugins_body"
+            sleep 10
+          done
+          test "$ok" = 1
+
+      - name: Self-delete finalizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git pull --rebase origin main
+          git rm .github/workflows/release-finalize-v0.2.10.yml
+          git commit -m 'chore: remove v0.2.10 release finalizer'
+          git push origin HEAD:main
