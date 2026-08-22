@@ -1,0 +1,51 @@
+name: Verify 1024Store v0.2.10 sync
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/verify-1024store-v0.2.10.yml
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Fetch live 1024Store catalog entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .tmp
+          curl -L --fail --retry 3 --retry-delay 2 \
+            'https://deepseek1024.com/api/v1/plugins?q=dsh-usage-stats' \
+            -o .tmp/1024store-v0.2.10.json
+          node - <<'NODE'
+          const fs = require('fs');
+          const p = '.tmp/1024store-v0.2.10.json';
+          const data = JSON.parse(fs.readFileSync(p, 'utf8'));
+          const packages = Array.isArray(data.packages) ? data.packages : [];
+          const hit = packages.find(x => String(x?.id || '').toLowerCase() === 'ychris12138/dsh-usage-stats')
+            || packages.find(x => String(x?.url || '').toLowerCase().includes('ychris12138/dsh-usage-stats'))
+            || packages.find(x => String(x?.name || '').toLowerCase() === 'dsh-usage-stats');
+          if (!hit) throw new Error('dsh-usage-stats not found in 1024Store response');
+          fs.writeFileSync(p, JSON.stringify({
+            checkedAt: new Date().toISOString(),
+            package: hit
+          }, null, 2) + '\n');
+          NODE
+      - name: Commit result and self-delete verifier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git pull --rebase origin main
+          git add .tmp/1024store-v0.2.10.json
+          git rm .github/workflows/verify-1024store-v0.2.10.yml
+          git commit -m 'chore: capture 1024Store v0.2.10 verification result'
+          git push origin HEAD:main
