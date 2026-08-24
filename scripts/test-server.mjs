@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -14,6 +14,15 @@ function usageEvent(seq, inputTokens) {
 			usage: { inputTokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
 			message: { source: { model: "deepseek-chat" } }
 		}
+	};
+}
+
+function routeEvent(seq, provider, model) {
+	return {
+		seq,
+		time: Date.UTC(2026, 7, 23, 12, 0, seq),
+		type: "request/header",
+		data: { header: { config: { provider, model } } }
 	};
 }
 
@@ -71,6 +80,157 @@ async function testRouteFence(root) {
 	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=deepseek-official`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, account);
 	assert.equal(account.status, 200);
 	assert.equal(JSON.parse(account.body).account.status, "not-configured");
+	assert.equal(typeof routes.get(plugin.SESSION_CONTEXT_PATH), "function");
+}
+
+async function testSessionContext(root) {
+	const plugin = await freshModule("session-context", join(root, "session-context"));
+	const routes = new Map();
+	const events = [routeEvent(0, "route-a", "shared-model")];
+	const session = { id: "live-session", events };
+	let liveSessions = [session];
+	const sessions = {
+		get: (id) => liveSessions.find((entry) => entry.id === id),
+		list: () => liveSessions
+	};
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	const settings = {
+		get: (name) => name === "llm-pi-ai" ? {
+			providers: {
+				"route-a": {
+					displayName: "Friendly label",
+					baseURL: "https://api.deepseek.com/v1",
+					apiKeyEnv: "SECRET_API_KEY_REFERENCE"
+				},
+				"route-b": {
+					displayName: "Another label",
+					baseURL: "https://api.ollama.com/v1",
+					apiKeyEnv: "OTHER_SECRET_REFERENCE"
+				}
+			}
+		} : void 0
+	};
+	const touches = [];
+	const accounts = {
+		validate: async () => {},
+		touch: (providerId, activity) => touches.push([providerId, activity]),
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	await plugin.apply(makeContext({ sessions, persistence, routes, settings }), {}, { disableBackgroundRefresh: true, accounts });
+	const handler = routes.get(plugin.SESSION_CONTEXT_PATH);
+
+	const first = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, first);
+	assert.equal(first.status, 200);
+	assert.deepEqual(JSON.parse(first.body).context, {
+		sessionId: "live-session",
+		providerId: "route-a",
+		providerFamily: "deepseek",
+		model: "shared-model",
+		accountId: "route-a",
+		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0)
+	});
+	assert.doesNotMatch(first.body, /SECRET|apiKey|baseURL/i, "session context must not expose connection or credential fields");
+	assert.deepEqual(touches.at(-1), ["route-a", "active"], "session context must signal only its resolver-owned account identity");
+
+	const selectorSwitched = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&provider=route-b&model=shared-model`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, selectorSwitched);
+	assert.deepEqual(JSON.parse(selectorSwitched.body).context, {
+		sessionId: "live-session",
+		providerId: "route-b",
+		providerFamily: "ollama",
+		model: "shared-model",
+		accountId: "route-b",
+		updatedAt: null
+	}, "an accepted selector route must override the last request/header immediately");
+	assert.deepEqual(touches.at(-1), ["route-b", "active"], "selector route changes must update central scheduler activity");
+	const invalidSelectionQueries = [
+		"provider=route-b",
+		"provider=route-b&model=",
+		`provider=${"p".repeat(257)}&model=m`,
+		`provider=p&model=${"m".repeat(513)}`,
+		"provider=route%00b&model=m",
+		"provider=route-b&model=m%00"
+	];
+	for (const query of invalidSelectionQueries) {
+		const invalidSelection = makeResponse();
+		await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&${query}`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, invalidSelection);
+		assert.equal(invalidSelection.status, 400, `invalid selector hint must fail closed: ${query.slice(0, 80)}`);
+		assert.equal(JSON.parse(invalidSelection.body).error, "invalid-selection");
+	}
+	const boundaryProvider = "p".repeat(256);
+	const boundaryModel = "m".repeat(512);
+	const boundarySelection = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&provider=${boundaryProvider}&model=${boundaryModel}`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, boundarySelection);
+	assert.equal(boundarySelection.status, 200, "bounded selector hint limits must be inclusive");
+	assert.equal(JSON.parse(boundarySelection.body).context.providerId, boundaryProvider);
+	assert.equal(JSON.parse(boundarySelection.body).context.model, boundaryModel);
+
+	events.push(routeEvent(1, "route-b", "shared-model"));
+	const switched = makeResponse();
+	await handler({ method: "GET", url: plugin.SESSION_CONTEXT_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, switched);
+	assert.equal(switched.status, 200, "one live session may be selected without guessing");
+	assert.equal(JSON.parse(switched.body).context.providerId, "route-b");
+	assert.equal(JSON.parse(switched.body).context.providerFamily, "ollama");
+	assert.equal(JSON.parse(switched.body).context.model, "shared-model");
+
+	const missing = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=missing`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, missing);
+	assert.equal(missing.status, 404);
+	assert.equal(JSON.parse(missing.body).error, "unknown-session");
+
+	liveSessions = [session, { id: "second-session", events: [] }];
+	const ambiguous = makeResponse();
+	await handler({ method: "GET", url: plugin.SESSION_CONTEXT_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, ambiguous);
+	assert.equal(ambiguous.status, 400, "multiple live sessions require an explicit id instead of guessing the active browser session");
+	assert.equal(JSON.parse(ambiguous.body).error, "session-required");
+}
+
+async function testV3CacheUpgradeRefoldsCurrentRoute(root) {
+	const home = join(root, "v3-cache-upgrade");
+	const storage = join(home, "storages");
+	await mkdir(storage, { recursive: true });
+	const sessionId = "cached-live-session";
+	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
+		version: 3,
+		sessions: {
+			[sessionId]: {
+				kind: "live",
+				consumed: 1,
+				days: {},
+				lastSample: null,
+				currentModel: "route-a/deepseek-chat"
+			}
+		}
+	}), "utf8");
+	const plugin = await freshModule("v3-cache-upgrade", home);
+	const session = { id: sessionId, events: [routeEvent(0, "route-a", "deepseek-chat")] };
+	const settings = {
+		get: (name) => name === "llm-pi-ai" ? {
+			providers: {
+				"route-a": { displayName: "Route A", baseURL: "https://api.deepseek.com/v1" }
+			}
+		} : void 0
+	};
+	const context = makeContext({
+		sessions: { get: (id) => id === sessionId ? session : void 0, list: () => [session] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		settings
+	});
+
+	assert.deepEqual(await plugin.collectSessionContext(context, sessionId), {
+		sessionId,
+		providerId: "route-a",
+		providerFamily: "deepseek",
+		model: "deepseek-chat",
+		accountId: "route-a",
+		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0)
+	}, "a v3 cache without currentRoute must be invalidated and refolded even when no event is new");
+	const migrated = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
+	assert.equal(migrated.version, 4, "the rewritten cache must use schema v4");
+	assert.equal(migrated.sessions[sessionId].currentRoute.providerId, "route-a");
 }
 
 async function testConfigValidation(root) {
@@ -102,11 +262,15 @@ async function testLegacyZaiSubscriptionId(root) {
 		status: "ok",
 		windows: []
 	};
+	let accountRead = null;
 	const accounts = {
 		validate: async () => {},
 		subscriptionAccounts: async () => [account],
-		providerViews: async () => [],
-		get: async () => null,
+		providerViews: async () => [{ id: "zai-coding-cn", configured: true }],
+		get: async (providerId, options) => {
+			accountRead = { providerId, options };
+			return account;
+		},
 		refreshAll: async () => []
 	};
 	await plugin.apply(makeContext({ sessions: { list: () => [] }, persistence: { listSnapshots: async () => [], list: async () => [] }, routes }), {}, {
@@ -118,36 +282,62 @@ async function testLegacyZaiSubscriptionId(root) {
 	const legacy = JSON.parse(response.body).subscriptions[0];
 	assert.equal(legacy.id, "zai", "0.1.x clients require the canonical Z.ai subscription id");
 	assert.equal(account.id, "zai-coding-cn", "legacy canonicalization must not mutate the account protocol");
+	const detail = makeResponse();
+	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=zai-coding-cn&activity=detail`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, detail);
+	assert.equal(detail.status, 200);
+	assert.deepEqual(accountRead, { providerId: "zai-coding-cn", options: { force: false, activity: "detail" } }, "detail activity must stay a small server-owned AccountService hint");
 }
 
 async function testBackgroundRefresh(root) {
 	const plugin = await freshModule("background", join(root, "background"));
 	let refreshes = 0;
-	let interval = null;
+	let delay = null;
 	let tick = null;
 	let cleared = false;
+	let unsubscribed = false;
+	let policyChanged = null;
+	let clock = Date.UTC(2026, 7, 24, 0, 0, 0);
+	let accountDeadline = clock + 60000;
+	const activeSets = [];
+	const session = { id: "active-session", events: [routeEvent(0, "route-a", "shared-model")] };
 	const ctx = makeContext({
-		sessions: { list: () => [] },
+		sessions: { list: () => [session], get: (id) => id === session.id ? session : void 0 },
 		persistence: { listSnapshots: async () => [], list: async () => [] }
 	});
 	const cleanup = plugin.startBackgroundRefresh(ctx, {
-		refreshAll: async () => { refreshes += 1; }
+		setActiveProviders: (ids) => { activeSets.push([...ids]); },
+		refreshDue: async () => { refreshes += 1; },
+		nextRefreshAt: async () => accountDeadline,
+		subscribePolicyChanges: (listener) => {
+			policyChanged = listener;
+			return () => { unsubscribed = true; };
+		}
 	}, {
-		setInterval: (callback, ms) => {
+		config: { monitors: {} },
+		now: () => clock,
+		setTimeout: (callback, ms) => {
 			tick = callback;
-			interval = ms;
+			delay = ms;
 			return { unref: () => {} };
 		},
-		clearInterval: () => { cleared = true; }
+		clearTimeout: () => { cleared = true; }
 	});
-	await new Promise((resolve) => setImmediate(resolve));
-	assert.equal(interval, 300000);
+	await cleanup.ready;
+	assert.equal(delay, 60000, "one central timer must target the earliest account/usage deadline");
 	assert.equal(refreshes, 1, "background refresh must run immediately at startup");
+	assert.deepEqual(activeSets.at(-1), ["route-a"], "active providers must come from existing session route identity");
 	assert.equal(typeof tick, "function");
+	accountDeadline = clock + 15000;
+	policyChanged();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(delay, 15000, "an activity priority change must rearm the same central timer to the earlier deadline");
+	assert.equal(cleared, true, "rearming must clear the previously scheduled central timer");
+	clock += 15000;
 	await cleanup.refreshNow();
-	assert.equal(refreshes, 2, "the five-minute timer must refresh accounts again");
+	assert.equal(refreshes, 2, "manual scheduler wake must reuse the central refresh path");
 	await cleanup();
 	assert.equal(cleared, true);
+	assert.equal(unsubscribed, true, "scheduler cleanup must unsubscribe from AccountService policy changes");
 }
 
 async function testPersistedToLive(root) {
@@ -235,6 +425,8 @@ async function testZeroUsageRowsFiltered(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testSessionContext(root);
+	await testV3CacheUpgradeRefoldsCurrentRoute(root);
 	await testConfigValidation(root);
 	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);

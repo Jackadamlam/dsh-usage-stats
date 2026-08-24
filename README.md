@@ -54,11 +54,27 @@ dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
 
 然后重启已经运行的 `dsh web`，并在浏览器中硬刷新。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
 
+### 插件市场 GUI 安装（DSH Community Market，Path A 标准来源）
+
+本仓库按 [DSH Community Market 目录 adapter 指南](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/dsh-community-market/docs/catalog-adapter-guide.zh.md) 的**标准来源（Path A）** 接入，无需修改 Market 代码。内置两份目录数据：
+
+- `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
+- `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
+
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`（当前可用）。要启用 GUI「安装」按钮，需先发布：
+
+1. 仓库包身份已统一为 `@ychris12138/dsh-usage-stats`；每次发版需同步 `package.json` / `package-lock.json` / `catalog/v1/plugins.json` 的版本。
+2. 发布 scoped 公共包：`npm publish --access public`。
+3. 把 `catalog/v1/plugins.json` 内容发布到 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins`（GitHub Pages，manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
+4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
+
+> 若最终包名不同，请同步修改 `catalog-source.json` 的 `providerId`/`transport.endpoint` 与 `catalog/v1/plugins.json` 的身份字段。发布前目录条目可浏览但安装保持禁用（fail-closed，属预期）。
+
 升级或卸载：
 
 ```bash
-dsh plugin --profile web update dsh-usage-stats
-dsh plugin --profile web remove dsh-usage-stats
+dsh plugin --profile web update "@ychris12138/dsh-usage-stats"
+dsh plugin --profile web remove "@ychris12138/dsh-usage-stats"
 ```
 
 <details>
@@ -70,7 +86,7 @@ PowerShell、命令提示符和 macOS/Linux 终端使用同一条命令：
 npx --yes github:Ychris12138/dsh-usage-stats
 ```
 
-安装器会把运行文件复制到 `~/.dsh/profiles/node_modules/dsh-usage-stats`，并在 `profiles/web/cordis.patch.yml` 中幂等启用插件。重复运行即可更新，不会重复追加配置。设置了 `DSH_HOME` 时使用该目录。
+安装器会把运行文件复制到 `~/.dsh/profiles/node_modules/@ychris12138/dsh-usage-stats`，并在 `profiles/web/cordis.patch.yml` 中以带引号的 scoped identity 幂等启用插件。重复运行即可更新，不会重复追加配置；旧版 `name: dsh-usage-stats` 和未加引号的 `name: @ychris12138/dsh-usage-stats` 会自动迁移。设置了 `DSH_HOME` 时使用该目录。
 
 `dsh plugin` 与 `npx` 是两条独立安装路径，请选择其中一种；不要同时保留手工 Cordis entry 和 bundle 注册，否则会重复挂载。
 
@@ -102,8 +118,10 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Z.ai / 智谱 | 订阅 | `ZAI_API_KEY` | Coding Plan quota/subscription |
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
 | MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
+| Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
+| Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
@@ -142,15 +160,33 @@ KIMI_API_KEY: your-kimi-key
 MINIMAX_API_KEY: your-minimax-key
 # 中国区 MiniMax 用户可选；默认 global
 MINIMAX_API_REGION: cn
+OLLAMA_API_KEY: sk-ollama-your-key
 ```
 
 OpenCode Go 依次尝试 Harness credential、`~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。Bearer usage endpoint 目前不是公开 API，可能随上游变化；Cookie 等同登录凭据，不应进入日志或 issue。
+
+Ollama 云读取 `OLLAMA_API_KEY`，调用 `/api/usage` 展示两个订阅窗口（5 小时会话 + 每周），无余额；`usage` 按 0..1 比例换算为进度条。
+
+Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账户：当 provider 的 id 为 `ollama`，或其 baseURL 主机为 `ollama.com`（含子域）时自动选用；本地 Ollama（`localhost:11434`）不会被当作云配额账户。特殊代理/自定义端点可用显式 monitor 绑定：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: usage-stats
+      name: dsh-usage-stats
+      config:
+        monitors:
+          relay-ollama:            # 你配置的 provider id
+            adapter: ollama
+            usageBaseURL: https://ollama.example.com
+            credentialRef: OLLAMA_API_KEY   # 非已配置 provider 时必填
+```
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
 ### New API、Sub2API 与自定义 monitor
 
-在现有 `name: dsh-usage-stats` Cordis entry 下合并 `config`，不要追加第二个插件 entry。monitor 键必须是 Harness 中真实存在的 provider id；未知 provider、adapter 或非法映射会在路由和 timer 注册前阻止插件启动。例外：monitor 同时显式提供 `usageBaseURL` 与 `credentialRef` 时视为自包含，会在 provider 注册可见前临时物化为 provider（适用于 Harness 设置页里后加载的 provider），此时不要求该 provider 已出现在注册表中。
+在现有 `name: "@ychris12138/dsh-usage-stats"` Cordis entry 下合并 `config`，不要追加第二个插件 entry。monitor 键必须是 Harness 中真实存在的 provider id；未知 provider、adapter 或非法映射会在路由和 timer 注册前阻止插件启动。例外：monitor 同时显式提供 `usageBaseURL` 与 `credentialRef` 时视为自包含，会在 provider 注册可见前临时物化为 provider（适用于 Harness 设置页里后加载的 provider），此时不要求该 provider 已出现在注册表中。
 
 <details>
 <summary><strong>展开 monitor 配置示例</strong></summary>
@@ -161,7 +197,7 @@ New API 默认用 provider 推理 Token 查询 `/api/usage/token/`，并从 `/ap
 # ~/.dsh/profiles/web/cordis.patch.yml
 - insert:
     - id: usage-stats
-      name: dsh-usage-stats
+      name: "@ychris12138/dsh-usage-stats"
       config:
         monitors:
           relay-a:                 # Harness provider id
@@ -194,6 +230,25 @@ Sub2API 风格 `/v1/usage`：
               criticalBelow: 1
 ```
 
+> 注意：`sub2api` 适配器对应一部分 Sub2API 部署暴露的 `/v1/usage` 协议。真实 Sub2API 面板（Wei-Shaw/sub2api 系）不提供该公开接口，改用 `sub2api-auth` 适配器读取面板自己的余额（见下）。
+
+**真实 Sub2API 面板余额（`sub2api-auth`）**：Sub2API 面板把上游订阅统一暴露成 API，但上游供应商通常没有公开余额接口。`sub2api-auth` 用 provider 自己的推理 API Key 查询面板余额，同 CC Switch 的 General 模板：`GET {baseUrl}/user/balance`，`Authorization: Bearer {apiKey}`，读取 `body.balance`。**无需单独的面板凭据** —— provider 在 DSH 模型页里配置的那个 API Key 会被直接复用：
+
+```yaml
+        monitors:
+          relay-b:
+            adapter: sub2api-auth
+```
+
+（可选）若 `/user/balance` 返回 UTF-8 金额对应 `body.unit`，会显示该币种；否则默认 USD。今日已用额度尽量从 `GET /api/v1/usage/stats?period=today` 的 `total_actual_cost` 补充，查询不到也不影响余额展示。
+
+**自动识别真实 Sub2API 面板（`sub2api-auth`）**：只要把 Sub2API 面板作为普通 provider 配置进 DSH（带入它的 API Key），插件会探测该 provider 的 `GET /api/v1/settings/public`。若指纹命中真实 Sub2API 面板（返回 `data.affiliate_enabled: boolean`），就自动按 `sub2api-auth` 用该 provider 的 API Key 读取余额，**无需为该 provider 单独写 `adapter`，也无需额外凭据**。显式 `adapter` 始终优先于自动识别；没有配置 API Key 的 provider 绝不会被探测。
+
+```yaml
+# 只要这些（不需要单独的 SUB2API_* 凭据）
+# DSH 模型页里为 Sub2API 面板配置 provider，baseURL 指向面板，API Key 填可用的密钥
+```
+
 Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动识别。钱包响应显示余额；`quota_limited` 或包含 `subscription` 的响应自动切换为额度窗口。
 
 声明式自定义查询只支持受限 GET + JSON Pointer，不执行 JavaScript：
@@ -218,7 +273,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
+支持的 adapter：`deepseek-balance`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -248,7 +303,7 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Prefer `dsh plugin --profile web update dsh-usage-stats` when already installed; otherwise use `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`.
+2. Prefer `dsh plugin --profile web update "@ychris12138/dsh-usage-stats"` when already installed; otherwise use `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`.
 3. If unavailable, use: npx --yes github:Ychris12138/dsh-usage-stats
 4. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
 5. For npx, require a verified package and exactly one Cordis entry, then run again with --check.
@@ -283,6 +338,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 ## 隐私与安全 / Privacy & security
 
 - API Key、OpenCode `auth.json`、Cookie 与管理 PAT 不会进入浏览器响应、插件缓存或日志。
+- Sub2API `sub2api-auth` 复用 provider 自己的推理 API Key（模型页已配置的那个），不会再引入或落盘额外的面板凭据。
 - 自定义 monitor 默认要求 HTTPS、同源相对路径、手动 redirect 和 JSON 响应，body 上限为 1 MiB。
 - 发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝，防止 DNS rebinding 绕过私网限制。
 - `usageBaseURL` 禁止内嵌 username/password；`Authorization`、`X-API-Key`、`API-Key` 等 header 必须由 credential ref 注入。
