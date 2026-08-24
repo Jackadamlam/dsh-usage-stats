@@ -105,14 +105,19 @@ const ctx = {
 	}
 };
 exports_.apply(ctx);
-if (registrations.length !== 2) throw new Error(`expected sidebar + composer slot injections, got ${registrations.length}`);
+if (registrations.length !== 3) throw new Error(`expected sidebar + pill + composer dock slot injections, got ${registrations.length}`);
 const registrationBySlot = new Map(registrations);
 if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");
 if (!registrationBySlot.has("conversation.input.right")) throw new Error("current-session pill slot registration missing");
+if (!registrationBySlot.has("conversation.composer.dock")) throw new Error("composer dock status bar slot registration missing");
 for (const registerFn of registrationBySlot.values()) {
 	const disposer = registerFn();
 	if (typeof disposer !== "function") throw new Error("slot registration must return a disposer");
 }
+const dockEntry = registeredEntries.find((entry) => entry.options.name === "conversation.composer.dock");
+if (dockEntry?.options.id !== "stats") throw new Error("composer dock must shadow the shipped stats cell (id 'stats')");
+if (dockEntry?.options.priority !== -100) throw new Error("composer dock must register at a lower priority to win the shadow");
+if (typeof dockEntry.component !== "function") throw new Error("composer dock must register a component");
 const pillEntry = registeredEntries.find((entry) => entry.options.name === "conversation.input.right");
 if (pillEntry?.options.id !== "usage-stats-current-session-pill") throw new Error("pill list entry needs a stable unique id");
 if (typeof pillEntry.component !== "function") throw new Error("pill slot must register a component");
@@ -701,6 +706,39 @@ if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click mu
 if (!integrationRequests.some((path) => path.includes("/account?provider=opencode-go&activity=detail"))) throw new Error("the open detail panel must signal its provider to the central scheduler");
 await act(async () => { integrationRenderer.unmount(); });
 globalThis.fetch = originalFetch;
+
+// Merged composer-dock strip: render ComposerStatsBar with the standard-kit props
+// and guard against the react jsx-automatic-runtime trap (children MUST ride the
+// `children` prop here, not the third jsx argument) — an empty `<div class="usgx-bar">`
+// with no child rows means the strip silently renders blank in the real GUI.
+{
+	const nodes = [{ kind: "assistant", turn: 1, timing: { stepStartTime: 0, firstTokenTime: 100, completedTime: 5000 }, usage: { outputTokens: 1200 } }];
+	const proj = {
+		tokenUsage: { uncachedInputTokens: 3000, cacheReadTokens: 9000, cacheWriteTokens: 500, outputTokens: 1200 },
+		sessionStats: { turns: 2, steps: 3, llmMs: 4000, toolMs: 800, ttftMs: 150, ttftSteps: 3, decodeMs: 3000, decodeTokens: 900 },
+	};
+	const composerUseSession = (selector) => selector({ chat: { legacy: { nodes } } });
+	const composerUseProjection = (key) => proj[key] ?? undefined;
+	const composerCtx = {};
+	let composerRenderer;
+	await act(async () => {
+		composerRenderer = TestRenderer.create(react.createElement(exports_.ComposerStatsBar.bind(null, composerCtx), {
+			useSession: composerUseSession,
+			useProjection: composerUseProjection,
+			t: (key) => key,
+		}));
+	});
+	const tree = composerRenderer.toJSON();
+	if (tree === null || tree.props?.className !== "usgx-bar") throw new Error("composer strip must render the usgx-bar shell");
+	const lines = composerRenderer.root.findAllByType("div").filter((node) => node.props.className === "usgx-line" || node.props.className === "usgx-line2");
+	if (lines.length !== 2) throw new Error(`composer strip must render 2 rows, got ${lines.length} (children lost to jsx runtime)`);
+	const line1Text = lines[0].props.children?.props?.children ?? "";
+	if (typeof line1Text !== "string" || !line1Text.includes("轮")) throw new Error(`composer line-1 stats missing (got ${line1Text})`);
+	if (composerRenderer.root.findAllByType("a").length !== 2) throw new Error("composer strip must render both brand links (Qwen + DeepSeek)");
+	if (composerRenderer.root.findAllByType("svg").length !== 1) throw new Error("composer strip must render the DeepSeek whale svg");
+	await act(async () => { composerRenderer.unmount(); });
+	console.log("composer dock strip render ok (2 rows, brand links, whale svg)");
+}
 
 console.log("current-session pill rendering, switching, hook lifecycle, and request policy ok");
 console.log("SMOKE TEST PASSED");
