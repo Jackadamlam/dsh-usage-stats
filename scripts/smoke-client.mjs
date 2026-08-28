@@ -35,14 +35,13 @@ if (!source.includes('host.style.flexDirection = "column"')) throw new Error("cl
 if (!source.includes('document.addEventListener("pointerdown"')) throw new Error("open panel must listen for outside pointerdown");
 if (!source.includes('event.key === "Escape"')) throw new Error("open panel must dismiss on Escape");
 if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");
-// Badge layout regression: the collapsed badge must keep the 「用量/余额」label,
-// render the account value as a separate middle element, and keep today's token
-// count on the right — the label must never be replaced by the amount.
+// Badge layout regression: the collapsed badge must keep the 「用量/余额」label and
+// today's token count on the right, and must NOT render the account balance amount
+// (the panel is the single balance view now).
 if (!source.includes('translate("panel.badge")')) throw new Error("badge must keep the label text");
-if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
-if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
 if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
-if (!source.includes('.slots.inject("conversation.input.right"')) throw new Error("current-session pill must use the formal composer control slot");
+if (source.includes("badgeAmountText !== null &&")) throw new Error("badge must not render the account balance amount");
+if (source.includes('.slots.inject("conversation.input.right"')) throw new Error("current-session pill registration must be removed");
 const pillSource = source.slice(source.indexOf("//#region CurrentSessionPill"), source.indexOf("//#endregion", source.indexOf("//#region CurrentSessionPill")));
 if (pillSource.includes("setInterval") || pillSource.includes("setTimeout")) throw new Error("current-session pill must not add an independent polling loop");
 if (pillSource.includes("MutationObserver") || pillSource.includes("addEventListener")) throw new Error("current-session pill must use slot session snapshots instead of DOM observers/listeners");
@@ -105,10 +104,9 @@ const ctx = {
 	}
 };
 exports_.apply(ctx);
-if (registrations.length !== 3) throw new Error(`expected sidebar + pill + composer dock slot injections, got ${registrations.length}`);
+if (registrations.length !== 2) throw new Error(`expected sidebar + composer dock slot injections, got ${registrations.length}`);
 const registrationBySlot = new Map(registrations);
 if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");
-if (!registrationBySlot.has("conversation.input.right")) throw new Error("current-session pill slot registration missing");
 if (!registrationBySlot.has("conversation.composer.dock")) throw new Error("composer dock status bar slot registration missing");
 for (const registerFn of registrationBySlot.values()) {
 	const disposer = registerFn();
@@ -118,10 +116,6 @@ const dockEntry = registeredEntries.find((entry) => entry.options.name === "conv
 if (dockEntry?.options.id !== "stats") throw new Error("composer dock must shadow the shipped stats cell (id 'stats')");
 if (dockEntry?.options.priority !== -100) throw new Error("composer dock must register at a lower priority to win the shadow");
 if (typeof dockEntry.component !== "function") throw new Error("composer dock must register a component");
-const pillEntry = registeredEntries.find((entry) => entry.options.name === "conversation.input.right");
-if (pillEntry?.options.id !== "usage-stats-current-session-pill") throw new Error("pill list entry needs a stable unique id");
-if (typeof pillEntry.component !== "function") throw new Error("pill slot must register a component");
-if (pillEntry.options.inject("session-a").modelDirectory !== modelDirectory) throw new Error("pill must subscribe to the host model-selection store");
 // Missing mount point: the host may never invoke a slot injection callback.
 // apply() must still complete without attempting any DOM fallback or throwing.
 exports_.apply({
@@ -738,6 +732,61 @@ globalThis.fetch = originalFetch;
 	if (composerRenderer.root.findAllByType("svg").length !== 1) throw new Error("composer strip must render the DeepSeek whale svg");
 	await act(async () => { composerRenderer.unmount(); });
 	console.log("composer dock strip render ok (2 rows, brand links, whale svg)");
+}
+
+// Per-provider composer pills: feed mock /usage (DeepSeek + Qwen) and per-provider
+// /account snapshots, then assert each provider renders its OWN pill
+// (icon + name + today/cumulative/cache [+ balance]).
+{
+	const now = new Date();
+	const pad = (n) => String(n).padStart(2, "0");
+	const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+	const usagePayload = {
+		ok: true,
+		days: [{
+			date: today,
+			inputTokens: 110, outputTokens: 55, cacheReadTokens: 50, cacheWriteTokens: 0, tokens: 215, cacheHitRate: 31.3,
+			models: [
+				{ model: "deepseek-official/deepseek-chat", inputTokens: 100, outputTokens: 50, cacheReadTokens: 50, cacheWriteTokens: 0, tokens: 200, cacheHitRate: 33.3 },
+				{ model: "ark/qwen-max", inputTokens: 10, outputTokens: 5, cacheReadTokens: 0, cacheWriteTokens: 0, tokens: 15, cacheHitRate: 0 }
+			]
+		}],
+		total: { inputTokens: 110, outputTokens: 55, cacheReadTokens: 50, cacheWriteTokens: 0, tokens: 215, cacheHitRate: 31.3 }
+	};
+	globalThis.fetch = async (path) => {
+		const p = String(path);
+		if (p.includes("/account?provider=deepseek-official")) {
+			return { ok: true, json: async () => ({ ok: true, account: { id: "deepseek-official", displayName: "DeepSeek", mode: "balance", status: "ok", balance: { remaining: 36.44, currency: "CNY", total: 36.44 } } }) };
+		}
+		if (p.includes("/account?provider=ark")) {
+			return { ok: true, json: async () => ({ ok: true, account: { id: "ark", displayName: "千问", mode: "balance", status: "unsupported", balance: null } }) };
+		}
+		return { ok: true, json: async () => usagePayload };
+	};
+	const pillNodes = [{ kind: "assistant", turn: 1, timing: { stepStartTime: 0, firstTokenTime: 100, completedTime: 5000 }, usage: { outputTokens: 1200 } }];
+	const pillProj = { tokenUsage: { uncachedInputTokens: 3000, cacheReadTokens: 9000, cacheWriteTokens: 500, outputTokens: 1200 }, sessionStats: { turns: 2, steps: 3, llmMs: 4000, toolMs: 800, ttftMs: 150, ttftSteps: 3, decodeMs: 3000, decodeTokens: 900 } };
+	const pillUseSession = (selector) => selector({ chat: { legacy: { nodes: pillNodes } } });
+	const pillUseProjection = (key) => pillProj[key] ?? undefined;
+	let pillRenderer;
+	await act(async () => {
+		pillRenderer = TestRenderer.create(react.createElement(exports_.ComposerStatsBar.bind(null, {}), {
+			useSession: pillUseSession,
+			useProjection: pillUseProjection,
+			t: (key) => key,
+		}));
+		for (let i = 0; i < 12; i += 1) await Promise.resolve();
+	});
+	const pillMarkup = JSON.stringify(pillRenderer.toJSON());
+	if (!pillMarkup.includes("DeepSeek")) throw new Error("per-provider pill must label DeepSeek");
+	if (!pillMarkup.includes("千问")) throw new Error("per-provider pill must label the Qwen provider");
+	if (!pillMarkup.includes("余额")) throw new Error("DeepSeek pill must carry its account balance");
+	const qwenIdx = pillMarkup.indexOf("千问");
+	const dsB = pillMarkup.lastIndexOf("余额");
+	if (dsB > qwenIdx) throw new Error("DeepSeek balance must live in DeepSeek's own pill");
+	if (!pillMarkup.includes("今日")) throw new Error("per-provider pill must render today usage");
+	await act(async () => { pillRenderer.unmount(); });
+	globalThis.fetch = originalFetch;
+	console.log("composer per-provider pills ok");
 }
 
 console.log("current-session pill rendering, switching, hook lifecycle, and request policy ok");

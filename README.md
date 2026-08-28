@@ -9,8 +9,8 @@
 > 本仓库是 [Ychris12138/dsh-usage-stats](https://github.com/Ychris12138/dsh-usage-stats) 的 fork，在原作者的能力之上迭代了一个**对话输入框下方的常驻状态条**，并已**并入主插件成单一 bundle**：
 >
 > - 原插件的入口是侧边栏底部按钮，会被 DSH-better-sidebar 等侧边栏插件遮挡；
-> - 本分支把「今日用量 · 累计 · 缓存命中 · 账户余额」直接显示在**对话输入框正下方**（替换原 stats 行），每 5 分钟自动刷新，余额低值变色；行首千问站点 icon 置前、可点击跳 TokenPlan 订阅余量页；与 DS 用量数据绑定为一组、可点击跳 DeepSeek 用量页；
-> - 数据直接来自本插件自身的环回端点 `/api/usage-stats/usage`、`/api/usage-stats/balance`（不再需要代理端点 `/api/usgx/*`，也不再依赖额外安装 `usgx-status-bar`）；
+> - 本分支把「今日用量 · 累计 · 缓存命中 · 账户余额」直接显示在**对话输入框正下方**（替换原 stats 行），每 5 分钟自动刷新，余额低值变色；并且**按供应商一行一行展示**：每行 =「供应商 icon + 名称 + 今日 · 累计 · 缓存」，有公开账户接口的供应商（如 DeepSeek）再追加「余额」；千问 icon 可点击跳 TokenPlan 订阅余量页，DeepSeek 鲸鱼 icon 可点击跳 DeepSeek 用量页。面板的「Token 用量」区同样改为逐供应商 pill（今日 · 本月 · 累计 · 缓存）；
+> - 数据直接来自本插件自身的环回端点 `/api/usage-stats/usage`（用量）与 `/api/usage-stats/account?provider=`（逐供应商账户/余额，不再需要代理端点 `/api/usgx/*`，也不再依赖额外安装 `usgx-status-bar`）；
 > - **单一插件、单一 bundle、单一条目** —— 不再有「找不到老插件 / 版本不一致 / 重复挂载」的冲突面。
 >
 > 安装（自包含：把插件拷进 profile 目录，用相对路径安装，profile 不再依赖某个会移动的开发目录）：
